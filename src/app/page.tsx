@@ -42,7 +42,7 @@ export default function Home() {
                 variant="primary"
               />
               <ButtonLink
-                href="/downloads#nexunotepad"
+                href="/downloads/NexuNotePadSetup-0.5.0-x64-self-contained.exe"
                 label="Download NexuNotePad"
                 variant="secondary"
               />
@@ -96,8 +96,8 @@ export default function Home() {
                 Downloads preview
               </h2>
               <p className="mt-4 max-w-2xl text-base leading-7 text-[#c9d9d0]">
-                Confirmed release details are listed before a direct hosting
-                link is added.
+                Confirmed release details, installer notes, and checksum
+                information are listed before install.
               </p>
             </div>
             <ButtonLink href="/downloads" label="Open Downloads" variant="secondary" />

@@ -35,7 +35,7 @@ export default function NexuNotePadPage() {
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <ButtonLink
-                href="/downloads#nexunotepad"
+                href="/downloads/NexuNotePadSetup-0.5.0-x64-self-contained.exe"
                 label="Download Public Beta"
                 variant="primary"
               />
@@ -116,8 +116,8 @@ export default function NexuNotePadPage() {
             <div className="rounded-lg border border-[rgba(198,238,213,0.14)] bg-white/4 p-5">
               <h3 className="text-lg font-bold text-white">Feature context</h3>
               <p className="mt-3 text-sm leading-6 text-[#c9d9d0]">
-                AI requires a user-provided OpenAI API key and API quota.
-                Source Control v1 is read-only status.
+                AI requires a user-provided OpenAI API key and available API
+                quota. Source Control v1 is read-only status.
               </p>
             </div>
           </div>

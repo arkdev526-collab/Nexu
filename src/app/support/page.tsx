@@ -44,7 +44,7 @@ export default function SupportPage() {
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <ButtonLink
-                href="/downloads#nexunotepad"
+                href="/downloads/NexuNotePadSetup-0.5.0-x64-self-contained.exe"
                 label="NexuNotePad Downloads"
                 variant="primary"
               />

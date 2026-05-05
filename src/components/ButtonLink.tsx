@@ -23,10 +23,19 @@ export function ButtonLink({
   className = "",
 }: ButtonLinkProps) {
   const classes = `${baseStyles} ${variants[variant]} ${className}`;
+  const isDownloadAsset = href.startsWith("/downloads/") && href.includes(".");
 
   if (external) {
     return (
       <a className={classes} href={href} rel="noreferrer" target="_blank">
+        {label}
+      </a>
+    );
+  }
+
+  if (isDownloadAsset) {
+    return (
+      <a className={classes} download href={href}>
         {label}
       </a>
     );

@@ -11,9 +11,11 @@ export type ProductDownload = {
   version: string;
   filename: string;
   sha256: string;
+  sizeLabel: string;
   platform: string;
   build: string;
   href?: string;
+  checksumHref?: string;
   notes: string[];
 };
 
@@ -60,7 +62,7 @@ export const nexuNotePad: Product = {
   actions: [
     {
       label: "Download Public Beta",
-      href: "/downloads#nexunotepad",
+      href: "/downloads/NexuNotePadSetup-0.5.0-x64-self-contained.exe",
       variant: "primary",
     },
     {
@@ -86,7 +88,7 @@ export const nexuNotePad: Product = {
     "WebView2 Runtime may be required if not already installed",
     "PHP is not bundled",
     "PHP Preview/runtime execution is paused/not included",
-    "AI requires user OpenAI API key and API quota",
+    "AI requires user-provided OpenAI API key and available API quota",
     "ChatGPT subscription and OpenAI API billing are separate",
     "GitHub Import is ZIP snapshot only, not clone/sync",
     "Source Control does not commit/push/pull",
@@ -100,14 +102,20 @@ export const nexuNotePad: Product = {
     filename: "NexuNotePadSetup-0.5.0-x64-self-contained.exe",
     sha256:
       "CA12F90C95B221D05AF61CBFDC004736B7063167C1FD3B17EDF82D98CEA9EE12",
+    sizeLabel: "46.7 MB",
     platform: "Windows x64 installer",
     build: "Self-contained app build",
+    href: "/downloads/NexuNotePadSetup-0.5.0-x64-self-contained.exe",
+    checksumHref:
+      "/downloads/NexuNotePadSetup-0.5.0-x64-self-contained.exe.sha256",
     notes: [
-      "Windows x64 installer",
       "Self-contained app build",
-      "WebView2 Runtime may still be required",
+      "No separate .NET Desktop Runtime expected",
+      "WebView2 Runtime may be required if not already installed",
       "PHP is not bundled",
-      "Optional AI requires user OpenAI API key and API quota",
+      "Optional AI requires user-provided OpenAI API key and available API quota",
+      "ChatGPT subscription and OpenAI API billing are separate",
+      "Installer may show a Windows trust/SmartScreen warning if unsigned/new",
     ],
   },
 };
