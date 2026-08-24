@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - build/nexu-performance-ai-android-v0.1.0
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
