@@ -1,0 +1,125 @@
+name: Nexu Forge Android v0.11.0 RC
+
+on:
+  push:
+    branches:
+      - build/nexu-forge-android-v0.11.0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout isolated build branch
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Microsoft OpenJDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: microsoft
+          java-version: '21'
+          verify-signature: true
+
+      - name: Reconstruct exact Android source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/nexu-forge-android"
+          cat android-build/nexu-forge-v0.11.0/project.b64.part-* | base64 --decode > "$RUNNER_TEMP/nexu-forge-android/project.zip"
+          echo "D4F72E0CF2454F826C9554B42399DC29065E44BD1E163A1D6570560FD994508A  $RUNNER_TEMP/nexu-forge-android/project.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/nexu-forge-android/project"
+          unzip -q "$RUNNER_TEMP/nexu-forge-android/project.zip" -d "$RUNNER_TEMP/nexu-forge-android/project"
+
+      - name: Provision Android 16 SDK and Build Tools 36.0.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager)"
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          "$SDKMANAGER" --list_installed | tee "$RUNNER_TEMP/nexu-forge-android/sdk-installed.txt"
+
+      - name: Provision verified Gradle 9.5.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/nexu-forge-android"
+          curl --fail --location --silent --show-error --output gradle-9.5.0-bin.zip https://services.gradle.org/distributions/gradle-9.5.0-bin.zip
+          curl --fail --location --silent --show-error --output gradle-9.5.0-bin.zip.sha256 https://services.gradle.org/distributions/gradle-9.5.0-bin.zip.sha256
+          printf '%s  %s\n' "$(cat gradle-9.5.0-bin.zip.sha256)" gradle-9.5.0-bin.zip | sha256sum -c -
+          unzip -q gradle-9.5.0-bin.zip
+          "$RUNNER_TEMP/nexu-forge-android/gradle-9.5.0/bin/gradle" --version | tee gradle-version.txt
+
+      - name: Run unit tests, Android lint and release assembly
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="$RUNNER_TEMP/nexu-forge-android/project"
+          GRADLE="$RUNNER_TEMP/nexu-forge-android/gradle-9.5.0/bin/gradle"
+          "$GRADLE" -p "$PROJECT" clean testReleaseUnitTest lintRelease assembleRelease --stacktrace --warning-mode all | tee "$RUNNER_TEMP/nexu-forge-android/gradle-build.log"
+
+      - name: Zipalign, verify and inspect APK metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/nexu-forge-android"
+          PROJECT="$ROOT/project"
+          OUT="$ROOT/evidence"
+          BUILD_TOOLS="${ANDROID_HOME}/build-tools/36.0.0"
+          mkdir -p "$OUT"
+          APK="$(find "$PROJECT/app/build/outputs/apk/release" -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          test -n "$APK"
+          "$BUILD_TOOLS/zipalign" -P 16 -f -v 4 "$APK" "$OUT/Nexu-AI-3D-Forge-Android-v0.11.0-unsigned-aligned.apk" | tee "$OUT/zipalign-build.txt"
+          "$BUILD_TOOLS/zipalign" -c -P 16 -v 4 "$OUT/Nexu-AI-3D-Forge-Android-v0.11.0-unsigned-aligned.apk" | tee "$OUT/zipalign-verify.txt"
+          "$BUILD_TOOLS/aapt" dump badging "$OUT/Nexu-AI-3D-Forge-Android-v0.11.0-unsigned-aligned.apk" | tee "$OUT/apk-metadata.txt"
+          sha256sum "$OUT/Nexu-AI-3D-Forge-Android-v0.11.0-unsigned-aligned.apk" | tee "$OUT/unsigned-apk.sha256.txt"
+          cp "$ROOT/project.zip" "$OUT/Nexu-AI-3D-Forge-Android-v0.11.0-source.zip"
+          cp "$ROOT/gradle-build.log" "$OUT/gradle-build.log"
+          cp "$ROOT/sdk-installed.txt" "$OUT/sdk-installed.txt"
+          cp "$ROOT/gradle-version.txt" "$OUT/gradle-version.txt"
+          cp "$BUILD_TOOLS/lib/apksigner.jar" "$OUT/apksigner-36.0.0.jar"
+          find "$PROJECT/app/build/reports" -type f -maxdepth 5 -print -exec cp --parents '{}' "$OUT" \; || true
+          find "$PROJECT/app/build/test-results" -type f -maxdepth 6 -print -exec cp --parents '{}' "$OUT" \; || true
+
+      - name: Emit build-verification summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/nexu-forge-android/evidence"
+          {
+            echo "Nexu AI 3D Forge Android v0.11.0 — CI Build Verification"
+            echo "Commit: $GITHUB_SHA"
+            echo "Package target: uk.co.sumerostudio.nexuai3dforge"
+            echo "versionName target: 0.11.0"
+            echo "versionCode target: 110"
+            echo "compileSdk: 36"
+            echo "targetSdk: 36"
+            echo "minSdk: 30"
+            echo "Build Tools: 36.0.0"
+            echo "Gradle: 9.5.0"
+            echo "JDK: 21"
+            echo "Source archive SHA-256: D4F72E0CF2454F826C9554B42399DC29065E44BD1E163A1D6570560FD994508A"
+            echo "Unit tests: PASS if workflow is successful"
+            echo "Android lint: PASS if workflow is successful"
+            echo "Release assembly: PASS if workflow is successful"
+            echo "ZIP alignment: PASS if workflow is successful"
+            echo "Signing: deliberately NOT performed in CI"
+          } > "$OUT/BUILD-VERIFICATION-CI.txt"
+
+      - name: Upload unsigned release and evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: nexu-forge-android-v0.11.0-unsigned-rc
+          path: ${{ runner.temp }}/nexu-forge-android/evidence/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
