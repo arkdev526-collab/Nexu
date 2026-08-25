@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/nexu-forge-android"
-          cat android-build/nexu-forge-v0.11.0/project.b64.part-* | base64 --decode > "$RUNNER_TEMP/nexu-forge-android/project.zip"
+          cat android-build/nexu-forge-v0.11.0/project.b64.part-* | tr -cd 'A-Za-z0-9+/=' | base64 --decode > "$RUNNER_TEMP/nexu-forge-android/project.zip"
           echo "D4F72E0CF2454F826C9554B42399DC29065E44BD1E163A1D6570560FD994508A  $RUNNER_TEMP/nexu-forge-android/project.zip" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/nexu-forge-android/project"
           unzip -q "$RUNNER_TEMP/nexu-forge-android/project.zip" -d "$RUNNER_TEMP/nexu-forge-android/project"
