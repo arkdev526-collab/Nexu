@@ -1,4 +1,5 @@
 import { requireUser } from "@/mintedup/auth";
+import { consumeQuota } from "@/mintedup/quota";
 import { autocompleteListing } from "@/mintedup/ai";
 import { fail, ok, str } from "@/mintedup/http";
 import { ListingError } from "@/mintedup/listings";
@@ -13,6 +14,7 @@ import { read, readUpload } from "@/mintedup/store";
 export async function POST(request: Request) {
   try {
     const user = await requireUser();
+    const quota = await consumeQuota(user, "autocomplete");
     const body = await request.json();
     const listingId = str(body.listingId);
 
@@ -49,7 +51,7 @@ export async function POST(request: Request) {
       researchSignals: context.signals,
     });
 
-    return ok({ draft, imagesRead: images.length });
+    return ok({ draft, imagesRead: images.length, quota });
   } catch (error) {
     return fail(error);
   }

@@ -55,6 +55,10 @@ export default async function BrowsePage({ searchParams }: { searchParams: Searc
     l.format === "bid" ? currentBid(l, bids).amount : l.price;
 
   const sorted = [...filtered].sort((a, b) => {
+    // Boosted lots lead the catalogue whatever the sort — that is what the
+    // shop tier is buying — but only within the seller's slot allowance, which
+    // the boost endpoint enforces.
+    if (Boolean(a.boostedAt) !== Boolean(b.boostedAt)) return a.boostedAt ? -1 : 1;
     switch (sort) {
       case "ending":
         return (a.endsAt ? Date.parse(a.endsAt) : Infinity) - (b.endsAt ? Date.parse(b.endsAt) : Infinity);

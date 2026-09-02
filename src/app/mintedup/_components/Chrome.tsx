@@ -3,9 +3,9 @@ import { currentUser } from "@/mintedup/auth";
 
 const NAV = [
   { href: "/mintedup/browse", label: "Browse" },
-  { href: "/mintedup/browse?format=bid", label: "Auctions" },
+  { href: "/mintedup/sales", label: "Curated sales" },
   { href: "/mintedup/research", label: "Research" },
-  { href: "/mintedup/sell", label: "Sell" },
+  { href: "/mintedup/membership", label: "Membership" },
 ];
 
 export async function MuHeader() {
@@ -61,8 +61,8 @@ export async function MuHeader() {
               >
                 Sign in
               </Link>
-              <Link className="mu-btn mu-btn-primary" href="/mintedup/signin?mode=register">
-                Open a shop
+              <Link className="mu-btn mu-btn-primary" href="/mintedup/apply">
+                Apply
               </Link>
             </>
           )}
@@ -90,15 +90,16 @@ export function MuFooter() {
             title: "Marketplace",
             links: [
               { href: "/mintedup/browse", label: "Browse everything" },
-              { href: "/mintedup/browse?format=bid", label: "Live auctions" },
+              { href: "/mintedup/sales", label: "Curated sales" },
               { href: "/mintedup/browse?format=buy", label: "Buy it now" },
             ],
           },
           {
             title: "Sellers",
             links: [
+              { href: "/mintedup/apply", label: "Apply for membership" },
+              { href: "/mintedup/membership", label: "Membership & fees" },
               { href: "/mintedup/sell", label: "Create a listing" },
-              { href: "/mintedup/dashboard", label: "Your dashboard" },
               { href: "/mintedup/standards", label: "Photography standard" },
             ],
           },
@@ -128,8 +129,8 @@ export function MuFooter() {
         ))}
       </div>
       <div className="mu-sans border-t border-[var(--mu-line)] px-5 py-6 text-center text-xs text-[var(--mu-muted)]">
-        Minted Up — antiques and collectibles only. Descriptions are written by sellers; condition
-        reports are theirs, not ours.
+        Minted Up — antiques and collectibles only, by invitation. Every lot is read by a curator
+        before it is catalogued; descriptions and condition reports remain the seller&rsquo;s own.
       </div>
     </footer>
   );

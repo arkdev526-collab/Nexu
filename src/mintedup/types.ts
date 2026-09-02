@@ -5,7 +5,30 @@
  * taxonomy in `categories.ts` is the only vocabulary listings may use.
  */
 
-export type Role = "user" | "admin";
+export type Role = "user" | "curator" | "admin";
+
+/**
+ * Minted Up is invite-only. `free` members are approved applicants on a taster
+ * allowance; `shop` members pay the monthly subscription. See membership.ts for
+ * what each tier is entitled to.
+ */
+export type Tier = "free" | "shop";
+
+export type Membership = {
+  tier: Tier;
+  status: "active" | "lapsed" | "cancelled";
+  since: string;
+  /** Next billing date for a shop member; null on the free tier. */
+  renewsAt: string | null;
+  cancelledAt: string | null;
+};
+
+/** Metered features, reset when `month` rolls over. */
+export type Usage = {
+  month: string;
+  aiSeo: number;
+  autocomplete: number;
+};
 
 export type User = {
   id: string;
@@ -16,6 +39,13 @@ export type User = {
   passwordHash: string;
   passwordSalt: string;
   shop: Shop;
+  membership: Membership;
+  usage: Usage;
+  /** Taster allowance. Decremented on publish; ignored on the shop tier. */
+  freeListingsRemaining: number;
+  /** Set by a curator once the seller has a track record. */
+  verified: boolean;
+  invitedBy: string | null;
   createdAt: string;
   suspended: boolean;
 };
@@ -26,6 +56,8 @@ export type Shop = {
   tagline: string;
   about: string;
   location: string;
+  /** Shop-tier customisation. */
+  bannerColour: string;
   /** Specialisms, drawn from the category taxonomy. Powers shop-level SEO. */
   specialties: string[];
   returnsPolicy: string;
@@ -34,7 +66,50 @@ export type Shop = {
 
 export type ListingFormat = "buy" | "bid";
 
-export type ListingStatus = "draft" | "active" | "sold" | "ended" | "removed";
+/**
+ * Minted Up runs curated sales: nothing reaches the catalogue without a curator
+ * passing it. `draft` -> `submitted` -> `approved` -> `active`, with `changes`
+ * and `rejected` as the two ways back.
+ */
+export type ListingStatus =
+  | "draft"
+  | "submitted"
+  | "changes"
+  | "rejected"
+  | "approved"
+  | "active"
+  | "sold"
+  | "ended"
+  | "removed";
+
+export type Curation = {
+  curatorId: string | null;
+  decidedAt: string | null;
+  /** Shown to the seller verbatim, so it must be written to be read by them. */
+  notes: string;
+  /** What the curator asked to be changed before resubmission. */
+  changesRequested: string[];
+  submittedAt: string | null;
+  /** Shop members are curated first. */
+  priority: boolean;
+};
+
+/**
+ * A themed, scheduled sale. Lots are grouped into one so the catalogue reads
+ * like a saleroom calendar rather than an endless feed.
+ */
+export type CuratedAuction = {
+  id: string;
+  title: string;
+  strapline: string;
+  description: string;
+  categoryIds: string[];
+  opensAt: string;
+  closesAt: string;
+  status: "scheduled" | "live" | "closed";
+  curatorId: string | null;
+  createdAt: string;
+};
 
 /** Result of the high-end image gate. Stored so admin can audit decisions. */
 export type ImageQuality = {
@@ -137,6 +212,13 @@ export type Listing = {
   /** Set when the beta auto-complete drafted this listing from its images. */
   autofilledFrom: string | null;
   researchSessionId: string | null;
+  curation: Curation;
+  /** The curated sale this lot belongs to; auctions only. */
+  auctionId: string | null;
+  /** Shop-tier promotion: boosted lots sort first in the catalogue. */
+  boostedAt: string | null;
+  /** How many times the closing time has been extended by a late bid. */
+  extensions: number;
   shipping: { domestic: number; international: number; collectionOnly: boolean };
   views: number;
   watchers: string[];
@@ -238,6 +320,53 @@ export type LearningEvent = {
   createdAt: string;
 };
 
+/** An application to join. Minted Up does not take open registrations. */
+export type Application = {
+  id: string;
+  email: string;
+  name: string;
+  /** What they deal in, in their own words. */
+  dealing: string;
+  links: string;
+  status: "pending" | "approved" | "rejected";
+  notes: string;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+};
+
+/** Issued on approval. One code, one email, one use. */
+export type Invite = {
+  code: string;
+  email: string;
+  applicationId: string | null;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string;
+  usedAt: string | null;
+  usedBy: string | null;
+};
+
+/**
+ * Accrued fees and charges.
+ *
+ * NOTE: this is a ledger, not a payment processor. Nothing here moves money —
+ * entries record what a seller owes or has been charged so the numbers are
+ * right when a real processor is wired in. See docs/mintedup/README.md.
+ */
+export type LedgerEntry = {
+  id: string;
+  userId: string;
+  kind: "listing_fee" | "commission" | "subscription" | "credit";
+  /** Minor units. Positive is owed to Minted Up, negative is a credit. */
+  amount: number;
+  currency: "GBP";
+  description: string;
+  listingId: string | null;
+  orderId: string | null;
+  createdAt: string;
+};
+
 export type Session = {
   token: string;
   userId: string;
@@ -254,4 +383,8 @@ export type Database = {
   researchSessions: ResearchSession[];
   researchDocs: ResearchDoc[];
   learningEvents: LearningEvent[];
+  applications: Application[];
+  invites: Invite[];
+  ledger: LedgerEntry[];
+  auctions: CuratedAuction[];
 };

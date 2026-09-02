@@ -1,5 +1,6 @@
+import { chargeCommission } from "./billing";
 import { formatMoney } from "./format";
-import { contributeListing, recordOutcome } from "./research";
+import { recordOutcome } from "./research";
 import { mutate, newId, read } from "./store";
 import type { Bid, Listing, Order } from "./types";
 
@@ -52,6 +53,21 @@ export function isLive(listing: Listing): boolean {
 }
 
 /**
+ * The closing countdown.
+ *
+ * Every bid pushes the closing time out, and each successive extension is one
+ * second shorter than the last: 10s, 9s, 8s ... down to a one-second floor. A
+ * sniper cannot take a lot in the final instant, and — because the increments
+ * shrink — a contested lot still closes rather than running all night.
+ */
+export const FIRST_EXTENSION_SECONDS = 10;
+export const MIN_EXTENSION_SECONDS = 1;
+
+export function extensionSeconds(previousExtensions: number): number {
+  return Math.max(MIN_EXTENSION_SECONDS, FIRST_EXTENSION_SECONDS - previousExtensions);
+}
+
+/**
  * Place a proxy bid. `maxAmount` is the ceiling the bidder authorises; the
  * visible bid moves to one increment above the runner-up, or to the ceiling if
  * the two ceilings are close.
@@ -60,12 +76,26 @@ export async function placeBid(input: {
   listingId: string;
   bidderId: string;
   maxAmount: number;
-}): Promise<{ bid: Bid; visibleAmount: number; leading: boolean }> {
+}): Promise<{
+  bid: Bid;
+  visibleAmount: number;
+  leading: boolean;
+  secondsAdded: number;
+  endsAt: string | null;
+  nextExtensionSeconds: number;
+}> {
   return mutate((db) => {
     const listing = db.listings.find((l) => l.id === input.listingId);
     if (!listing) throw new ListingError("Listing not found.", 404);
     if (listing.format !== "bid") throw new ListingError("This listing is not an auction.");
     if (!isLive(listing)) throw new ListingError("Bidding on this lot has closed.");
+    // A lot in a curated sale cannot be bid on before that sale opens.
+    const auction = listing.auctionId
+      ? db.auctions.find((a) => a.id === listing.auctionId)
+      : null;
+    if (auction && Date.now() < Date.parse(auction.opensAt)) {
+      throw new ListingError(`${auction.title} has not opened yet.`, 409);
+    }
     if (listing.sellerId === input.bidderId) {
       throw new ListingError("You cannot bid on your own lot.");
     }
@@ -120,16 +150,22 @@ export async function placeBid(input: {
       });
     }
 
-    // Anti-sniping: a bid inside the last five minutes extends the lot.
+    // Extend the clock, shrinking the increment each time.
+    const added = extensionSeconds(listing.extensions);
     if (listing.endsAt) {
-      const remaining = Date.parse(listing.endsAt) - Date.now();
-      if (remaining < 5 * 60_000) {
-        listing.endsAt = new Date(Date.now() + 5 * 60_000).toISOString();
-      }
+      listing.endsAt = new Date(Date.parse(listing.endsAt) + added * 1000).toISOString();
     }
+    listing.extensions += 1;
     listing.updatedAt = new Date().toISOString();
 
-    return { bid, visibleAmount, leading: bidderLeads };
+    return {
+      bid,
+      visibleAmount,
+      leading: bidderLeads,
+      secondsAdded: added,
+      endsAt: listing.endsAt,
+      nextExtensionSeconds: extensionSeconds(listing.extensions),
+    };
   });
 }
 
@@ -161,6 +197,12 @@ export async function buyNow(input: { listingId: string; buyerId: string }): Pro
     return { order, listing: structuredClone(listing) };
   });
 
+  await chargeCommission({
+    sellerId: order.sellerId,
+    orderId: order.id,
+    listingId: order.listingId,
+    amount: order.amount,
+  });
   // Loop 4: tell the research engine what the market paid.
   await recordOutcome(listing, { sold: true, price: order.amount });
   return order;
@@ -202,6 +244,14 @@ export async function settleAuction(listingId: string): Promise<Order | null> {
   });
 
   if (!outcome) return null;
+  if (outcome.order) {
+    await chargeCommission({
+      sellerId: outcome.order.sellerId,
+      orderId: outcome.order.id,
+      listingId: outcome.order.listingId,
+      amount: outcome.order.amount,
+    });
+  }
   await recordOutcome(outcome.listing, {
     sold: Boolean(outcome.order),
     price: outcome.order?.amount ?? null,
@@ -225,29 +275,8 @@ export async function settleDueAuctions(): Promise<void> {
   for (const id of due) await settleAuction(id);
 }
 
-export async function publishListing(listingId: string, sellerId: string): Promise<Listing> {
-  const listing = await mutate((db) => {
-    const found = db.listings.find((l) => l.id === listingId);
-    if (!found) throw new ListingError("Listing not found.", 404);
-    if (found.sellerId !== sellerId) throw new ListingError("That is not your listing.", 403);
-
-    const problems = validateForPublish(found);
-    if (problems.length) throw new ListingError(problems.join(" "), 422);
-
-    found.status = "active";
-    found.updatedAt = new Date().toISOString();
-    if (found.format === "bid" && !found.endsAt) {
-      found.endsAt = new Date(Date.now() + 7 * 864e5).toISOString();
-    }
-    return structuredClone(found);
-  });
-
-  // Loop 3: a published listing joins the research corpus straight away.
-  await contributeListing(listing);
-  return listing;
-}
-
-export function validateForPublish(listing: Listing): string[] {
+/** What a lot must have before a curator will even look at it. */
+export function validateForSubmission(listing: Listing): string[] {
   const problems: string[] = [];
   if (listing.title.trim().length < 12) problems.push("Give the listing a fuller title.");
   if (listing.description.trim().length < 80) {
@@ -293,6 +322,17 @@ export async function createDraft(sellerId: string, categoryId: string): Promise
     seo: { metaTitle: "", metaDescription: "", keywords: [], aiAssistedFields: [] },
     autofilledFrom: null,
     researchSessionId: null,
+    curation: {
+      curatorId: null,
+      decidedAt: null,
+      notes: "",
+      changesRequested: [],
+      submittedAt: null,
+      priority: false,
+    },
+    auctionId: null,
+    boostedAt: null,
+    extensions: 0,
     shipping: { domestic: 0, international: 0, collectionOnly: false },
     views: 0,
     watchers: [],

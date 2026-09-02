@@ -1,6 +1,7 @@
 import { hashPassword } from "./auth";
+import { currentMonth, FREE_LISTING_ALLOWANCE } from "./membership";
 import { mutate, newId, read } from "./store";
-import type { Database, Listing, ResearchDoc, User } from "./types";
+import type { CuratedAuction, Database, Listing, ResearchDoc, User } from "./types";
 
 /**
  * First-run seed.
@@ -194,7 +195,21 @@ const MARKET: (SeedDoc & { realisedPrice: number })[] = [
   },
 ];
 
-async function seedListings(db: Database, sellerId: string): Promise<void> {
+async function seedListings(
+  db: Database,
+  sellerId: string,
+  curatorId: string,
+  auctionId: string,
+): Promise<void> {
+  const curated = (curatorId: string) => ({
+    curatorId,
+    decidedAt: daysAgo(3),
+    notes: "Marks legible in the photographs, condition honestly stated. Passed.",
+    changesRequested: [] as string[],
+    submittedAt: daysAgo(5),
+    priority: true,
+  });
+
   const base = {
     sellerId,
     status: "active" as const,
@@ -206,10 +221,13 @@ async function seedListings(db: Database, sellerId: string): Promise<void> {
     researchSessionId: null,
     soldAt: null,
     soldPrice: null,
+    boostedAt: null,
+    extensions: 0,
     shipping: { domestic: 1500, international: 4500, collectionOnly: false },
   };
 
-  const drafts: Omit<Listing, "id" | "createdAt" | "updatedAt">[] = [
+  // curation and auctionId are attached at insert time, below.
+  const drafts: Omit<Listing, "id" | "createdAt" | "updatedAt" | "curation" | "auctionId">[] = [
     {
       ...base,
       title: "Regency rosewood card table, brass line inlay",
@@ -247,7 +265,7 @@ async function seedListings(db: Database, sellerId: string): Promise<void> {
       price: 0,
       startingBid: 12000,
       reserve: 15000,
-      endsAt: daysAhead(4),
+      endsAt: daysAhead(3),
       attributes: {
         maker: "", period: "Victorian, 1874", origin: "Birmingham",
         materials: ["Sterling silver"], marks: "Anchor, lion passant, date letter for 1874, maker's mark",
@@ -299,7 +317,7 @@ async function seedListings(db: Database, sellerId: string): Promise<void> {
       price: 0,
       startingBid: 6000,
       reserve: 0,
-      endsAt: daysAhead(2),
+      endsAt: daysAhead(3),
       attributes: {
         maker: "", period: "Early 20th century", origin: "",
         materials: ["Laid paper", "Etching ink"], marks: "Signed in pencil, lower margin",
@@ -320,6 +338,9 @@ async function seedListings(db: Database, sellerId: string): Promise<void> {
     db.listings.push({
       ...draft,
       id: newId("lst"),
+      curation: curated(curatorId),
+      // Auction lots belong to the current curated sale; buy-it-now does not.
+      auctionId: draft.format === "bid" ? auctionId : null,
       createdAt: daysAgo(6),
       updatedAt: daysAgo(2),
     });
@@ -341,7 +362,9 @@ export async function ensureSeeded(): Promise<void> {
 
 async function runSeed(): Promise<void> {
   const admin = await hashPassword("mintedup-admin-2026");
+  const curator = await hashPassword("curator-demo-2026");
   const seller = await hashPassword("dealer-demo-2026");
+  const taster = await hashPassword("taster-demo-2026");
 
   await mutate(async (db) => {
     if (db.users.length > 0 || db.researchDocs.length > 0) return;
@@ -352,10 +375,34 @@ async function runSeed(): Promise<void> {
       passwordHash: admin.hash, passwordSalt: admin.salt,
       shop: {
         name: "Minted Up", slug: "mintedup", tagline: "House account",
-        about: "", location: "", specialties: [],
+        about: "", location: "", bannerColour: "#d8b45a", specialties: [],
         returnsPolicy: "", shippingPolicy: "",
       },
+      membership: {
+        tier: "shop", status: "active", since: daysAgo(60),
+        renewsAt: daysAhead(30), cancelledAt: null,
+      },
+      usage: { month: currentMonth(), aiSeo: 0, autocomplete: 0 },
+      freeListingsRemaining: 0, verified: true, invitedBy: null,
       createdAt: daysAgo(60), suspended: false,
+    };
+
+    const curatorUser: User = {
+      id: newId("usr"), email: "curator@mintedup.example", handle: "curation",
+      displayName: "Curation Desk", role: "curator",
+      passwordHash: curator.hash, passwordSalt: curator.salt,
+      shop: {
+        name: "Curation Desk", slug: "curation-desk", tagline: "House account",
+        about: "", location: "", bannerColour: "#4f9b86", specialties: [],
+        returnsPolicy: "", shippingPolicy: "",
+      },
+      membership: {
+        tier: "shop", status: "active", since: daysAgo(55),
+        renewsAt: daysAhead(30), cancelledAt: null,
+      },
+      usage: { month: currentMonth(), aiSeo: 0, autocomplete: 0 },
+      freeListingsRemaining: 0, verified: true, invitedBy: null,
+      createdAt: daysAgo(55), suspended: false,
     };
 
     const sellerUser: User = {
@@ -367,14 +414,57 @@ async function runSeed(): Promise<void> {
         tagline: "Georgian and Victorian silver, ceramics and country furniture",
         about: "A small dealership working out of a market town, buying at house sales and clearing single-owner collections. Everything is described with its faults.",
         location: "Ludlow, Shropshire",
+        bannerColour: "#b8863b",
         specialties: ["silver-hallmarked", "furniture-georgian", "ceramics-pottery"],
         returnsPolicy: "14-day returns, buyer pays return shipping unless misdescribed.",
         shippingPolicy: "Fully insured and tracked. Furniture by specialist carrier, quoted per lot.",
       },
+      membership: {
+        tier: "shop", status: "active", since: daysAgo(45),
+        renewsAt: daysAhead(12), cancelledAt: null,
+      },
+      usage: { month: currentMonth(), aiSeo: 0, autocomplete: 0 },
+      freeListingsRemaining: 0, verified: true, invitedBy: null,
       createdAt: daysAgo(45), suspended: false,
     };
 
-    db.users.push(adminUser, sellerUser);
+    const tasterUser: User = {
+      id: newId("usr"), email: "taster@mintedup.example", handle: "attic-finds",
+      displayName: "Attic Finds", role: "user",
+      passwordHash: taster.hash, passwordSalt: taster.salt,
+      shop: {
+        name: "Attic Finds", slug: "attic-finds",
+        tagline: "Clearing a family house, one box at a time",
+        about: "", location: "Norwich", bannerColour: "#d8b45a", specialties: [],
+        returnsPolicy: "14-day returns on all items unless described otherwise.",
+        shippingPolicy: "Tracked and insured.",
+      },
+      membership: {
+        tier: "free", status: "active", since: daysAgo(9),
+        renewsAt: null, cancelledAt: null,
+      },
+      usage: { month: currentMonth(), aiSeo: 2, autocomplete: 1 },
+      freeListingsRemaining: FREE_LISTING_ALLOWANCE, verified: false,
+      invitedBy: adminUser.id,
+      createdAt: daysAgo(9), suspended: false,
+    };
+
+    db.users.push(adminUser, curatorUser, sellerUser, tasterUser);
+
+    const auction: CuratedAuction = {
+      id: newId("auc"),
+      title: "Silver, Ceramics & Country Furniture",
+      strapline: "A curated sale of eighty lots, closing Sunday evening",
+      description:
+        "Our weekly general sale. Every lot has been read by a curator against the photographs: marks confirmed as legible, condition faults declared, and attributions checked against the evidence rather than the hope. Bidding closes lot by lot from 7pm, with the closing clock extending on every late bid.",
+      categoryIds: ["silver-hallmarked", "ceramics-pottery", "furniture-georgian", "art-prints"],
+      opensAt: daysAgo(2),
+      closesAt: daysAhead(3),
+      status: "live",
+      curatorId: curatorUser.id,
+      createdAt: daysAgo(7),
+    };
+    db.auctions.push(auction);
 
     for (const doc of [...REFERENCE, ...MARKET]) {
       db.researchDocs.push({
@@ -388,11 +478,13 @@ async function runSeed(): Promise<void> {
       });
     }
 
-    await seedListings(db, sellerUser.id);
+    await seedListings(db, sellerUser.id, curatorUser.id, auction.id);
   });
 }
 
 export const DEMO_ACCOUNTS = [
   { email: "admin@mintedup.example", password: "mintedup-admin-2026", role: "Administrator" },
-  { email: "dealer@mintedup.example", password: "dealer-demo-2026", role: "Seller" },
+  { email: "curator@mintedup.example", password: "curator-demo-2026", role: "Curator" },
+  { email: "dealer@mintedup.example", password: "dealer-demo-2026", role: "Shop member (£20/mo)" },
+  { email: "taster@mintedup.example", password: "taster-demo-2026", role: "Free member (5 listings)" },
 ];

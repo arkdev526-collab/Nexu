@@ -128,53 +128,45 @@ export function ImageSlots({
         {Array.from({ length: IMAGE_RULES.maxSlots }, (_, slot) => {
           const image = bySlot.get(slot);
           const slotState = state[slot];
+
+          // A filled slot holds its own remove button, so it must not itself be
+          // a button — nesting one control inside another is invalid and makes
+          // the remove action unreachable by keyboard.
+          if (image) {
+            return (
+              <div key={slot} className="mu-slot mu-slot-filled cursor-default">
+                {/* eslint-disable-next-line @next/next/no-img-element -- uploads are streamed from the data dir. */}
+                <img src={`/api/mintedup/images/${image.filename}`} alt="" />
+                <span className="mu-sans absolute left-1 top-1 rounded bg-black/70 px-1.5 py-0.5 text-[0.625rem] font-bold text-[var(--mu-brass)]">
+                  {slot === 0 ? "Cover" : slot + 1}
+                </span>
+                <span className="mu-sans absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-[0.625rem] text-[var(--mu-muted)]">
+                  {image.quality.score}/100
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Remove photograph ${slot + 1}`}
+                  className="mu-sans absolute right-1 top-1 grid h-5 w-5 place-items-center rounded bg-black/70 text-xs text-[var(--mu-alert)]"
+                  onClick={() => void remove(slot)}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          }
+
           return (
-            <div
+            <button
               key={slot}
-              className={`mu-slot ${image ? "mu-slot-filled" : ""} ${
-                slotState?.rejection ? "mu-slot-rejected" : ""
-              }`}
+              type="button"
+              className={`mu-slot ${slotState?.rejection ? "mu-slot-rejected" : ""}`}
+              aria-label={`Add a photograph to slot ${slot + 1}`}
               onClick={() => {
-                if (image) return;
                 targetSlot.current = slot;
                 inputRef.current?.click();
               }}
-              role="button"
-              tabIndex={0}
-              aria-label={image ? `Photograph in slot ${slot + 1}` : `Add a photograph to slot ${slot + 1}`}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  if (!image) {
-                    targetSlot.current = slot;
-                    inputRef.current?.click();
-                  }
-                }
-              }}
             >
-              {image ? (
-                <>
-                  {/* eslint-disable-next-line @next/next/no-img-element -- uploads are streamed from the data dir. */}
-                  <img src={`/api/mintedup/images/${image.filename}`} alt="" />
-                  <span className="mu-sans absolute left-1 top-1 rounded bg-black/70 px-1.5 py-0.5 text-[0.625rem] font-bold text-[var(--mu-brass)]">
-                    {slot === 0 ? "Cover" : slot + 1}
-                  </span>
-                  <span className="mu-sans absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-[0.625rem] text-[var(--mu-muted)]">
-                    {image.quality.score}/100
-                  </span>
-                  <button
-                    type="button"
-                    aria-label={`Remove photograph ${slot + 1}`}
-                    className="mu-sans absolute right-1 top-1 grid h-5 w-5 place-items-center rounded bg-black/70 text-xs text-[var(--mu-alert)]"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void remove(slot);
-                    }}
-                  >
-                    ×
-                  </button>
-                </>
-              ) : slotState?.busy ? (
+              {slotState?.busy ? (
                 <span className="mu-sans mu-working text-[0.625rem] uppercase tracking-widest text-[var(--mu-brass)]">
                   Checking
                 </span>
@@ -183,7 +175,7 @@ export function ImageSlots({
                   {slotState?.rejection ? "!" : "+"}
                 </span>
               )}
-            </div>
+            </button>
           );
         })}
       </div>

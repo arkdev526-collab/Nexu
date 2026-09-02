@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CATEGORIES, getCategory } from "@/mintedup/categories";
-import { IMAGE_RULES } from "@/mintedup/images";
+
 import type { ConditionGrade, Listing, ListingImage } from "@/mintedup/types";
 import { AiSeoButton, type SeoRequest } from "./AiSeoButton";
 import { ImageSlots } from "./ImageSlots";
@@ -84,7 +84,27 @@ const money = (value: string) => Math.round((Number.parseFloat(value) || 0) * 10
 const list = (value: string) =>
   value.split(",").map((v) => v.trim()).filter(Boolean);
 
-export function ListingComposer({ listing }: { listing: Listing }) {
+export type ComposerContext = {
+  /** What publishing this lot will cost, worked out on the server. */
+  feeReason: string;
+  fee: number;
+  freeListingsRemaining: number;
+  isShopMember: boolean;
+  aiSeoRemaining: number | null;
+  autocompleteRemaining: number | null;
+  /** Curator feedback from a previous submission, if this lot came back. */
+  curationNotes: string;
+  changesRequested: string[];
+  status: string;
+};
+
+export function ListingComposer({
+  listing,
+  context,
+}: {
+  listing: Listing;
+  context: ComposerContext;
+}) {
   const router = useRouter();
   const [draft, setDraft] = useState<Draft>(() => toDraft(listing));
   const [images, setImages] = useState<ListingImage[]>(listing.images);
@@ -92,6 +112,7 @@ export function ListingComposer({ listing }: { listing: Listing }) {
   const [saved, setSaved] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [publishErrors, setPublishErrors] = useState<string[]>([]);
   const [publishing, setPublishing] = useState(false);
+  const [submitted, setSubmitted] = useState(context.status === "submitted");
 
   // Beta auto-complete
   const [hint, setHint] = useState("");
@@ -232,7 +253,7 @@ export function ListingComposer({ listing }: { listing: Listing }) {
     });
   }
 
-  async function publish() {
+  async function submitForCuration() {
     setPublishing(true);
     setPublishErrors([]);
     await fetch(`/api/mintedup/listings/${listing.id}`, {
@@ -240,16 +261,16 @@ export function ListingComposer({ listing }: { listing: Listing }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const response = await fetch(`/api/mintedup/listings/${listing.id}/publish`, {
+    const response = await fetch(`/api/mintedup/listings/${listing.id}/submit`, {
       method: "POST",
     });
     const body = await response.json().catch(() => ({}));
     setPublishing(false);
     if (!response.ok) {
-      setPublishErrors([body.error ?? "The listing could not be published."]);
+      setPublishErrors([body.error ?? "The lot could not be submitted."]);
       return;
     }
-    router.push(`/mintedup/listing/${listing.id}`);
+    setSubmitted(true);
     router.refresh();
   }
 
@@ -267,6 +288,28 @@ export function ListingComposer({ listing }: { listing: Listing }) {
 
   return (
     <div className="mu-sans space-y-10">
+      {/* ---- Curator feedback, when a lot has come back for changes ---- */}
+      {context.changesRequested.length > 0 || context.curationNotes ? (
+        <section className="rounded-xl border border-[var(--mu-alert)] bg-[rgba(224,118,78,0.07)] p-5">
+          <h2 className="mu-display text-xl">The curation desk asked for changes</h2>
+          {context.curationNotes ? (
+            <p className="mt-2 text-sm leading-relaxed text-[var(--mu-text)]">
+              {context.curationNotes}
+            </p>
+          ) : null}
+          {context.changesRequested.length > 0 ? (
+            <ul className="mt-3 space-y-1 text-sm text-[var(--mu-muted)]">
+              {context.changesRequested.map((change) => (
+                <li key={change}>— {change}</li>
+              ))}
+            </ul>
+          ) : null}
+          <p className="mt-3 text-xs text-[var(--mu-muted)]">
+            Make the changes and submit again. Resubmission does not cost you a listing.
+          </p>
+        </section>
+      ) : null}
+
       {/* ---- Beta auto-complete, at the top of the composer ---- */}
       <section className="rounded-xl border border-[var(--mu-verdigris)] bg-[rgba(79,155,134,0.07)] p-5 sm:p-6">
         <div className="flex flex-wrap items-center gap-3">
@@ -309,6 +352,13 @@ export function ListingComposer({ listing }: { listing: Listing }) {
           <p className="mt-3 text-xs text-[var(--mu-muted)]">
             Upload at least one photograph to enable this — auto-complete works from the images, not
             from the form.
+          </p>
+        ) : null}
+        {context.autocompleteRemaining !== null ? (
+          <p className="mt-3 text-xs text-[var(--mu-muted)]">
+            {context.autocompleteRemaining} auto-complete run
+            {context.autocompleteRemaining === 1 ? "" : "s"} left this month on the free tier. Shop
+            members get unlimited runs.
           </p>
         ) : null}
 
@@ -789,7 +839,7 @@ export function ListingComposer({ listing }: { listing: Listing }) {
         ) : null}
       </section>
 
-      {/* ---- Publish ---- */}
+      {/* ---- Submit for curation ---- */}
       <section className="sticky bottom-0 -mx-1 rounded-t-xl border-t border-[var(--mu-line-strong)] bg-[#0c0a08]/95 p-5 backdrop-blur-xl">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <ul className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
@@ -815,10 +865,14 @@ export function ListingComposer({ listing }: { listing: Listing }) {
             <button
               type="button"
               className="mu-btn mu-btn-primary"
-              onClick={publish}
-              disabled={!ready || publishing}
+              onClick={submitForCuration}
+              disabled={!ready || publishing || submitted}
             >
-              {publishing ? "Publishing…" : "Publish listing"}
+              {submitted
+                ? "With the curator"
+                : publishing
+                  ? "Submitting…"
+                  : "Submit for curation"}
             </button>
           </div>
         </div>
@@ -826,8 +880,11 @@ export function ListingComposer({ listing }: { listing: Listing }) {
           <p className="mt-3 text-sm text-[var(--mu-alert)]">{publishErrors.join(" ")}</p>
         ) : null}
         <p className="mt-2 text-[0.6875rem] text-[var(--mu-muted)]">
-          Up to {IMAGE_RULES.maxSlots} photographs per listing. Everything above autosaves as you
-          type.
+          {submitted
+            ? "A curator will read this lot and either catalogue it or come back with changes. You will see their notes here."
+            : `A curator reads every lot before it is catalogued. ${context.feeReason}${
+                context.isShopMember ? "" : " Commission is 1% of the sale value."
+              }`}
         </p>
       </section>
     </div>

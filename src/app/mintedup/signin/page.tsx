@@ -9,24 +9,25 @@ export const metadata = { title: "Sign in" };
 export default async function SignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ mode?: string }>;
+  searchParams: Promise<{ mode?: string; code?: string }>;
 }) {
   await ensureSeeded();
   if (await currentUser()) redirect("/mintedup/dashboard");
-  const { mode } = await searchParams;
+  const { mode, code } = await searchParams;
 
   return (
     <div className="mx-auto grid w-full max-w-5xl gap-12 px-5 py-16 sm:px-6 lg:grid-cols-2 lg:px-8">
       <div>
         <h1 className="mu-display text-4xl">Sell on Minted Up</h1>
         <p className="mu-sans mt-4 leading-relaxed text-[var(--mu-muted)]">
-          A shop on Minted Up gives you the listing composer with its 30-slot image grid, the AI SEO
-          assistant, the beta auto-complete that drafts a listing from your photographs, and the
-          research gateway that remembers what you worked out.
+          Minted Up is invite-only. Redeem the code a curator issued you, and you arrive as a free
+          member with five listings on the house — the composer with its 30-slot image grid, the AI
+          SEO assistant, the beta auto-complete, and the research gateway, all included while you
+          try it.
         </p>
         <ul className="mu-sans mt-6 space-y-3 text-sm text-[var(--mu-muted)]">
           {[
-            "Buy it now and proxy auctions, on the same listing form.",
+            "Every lot read by a curator before it reaches the catalogue.",
             "A photography standard that is measured, not asked for politely.",
             "Everything you research stays attached to the listing it becomes.",
           ].map((line) => (
@@ -48,13 +49,20 @@ export default async function SignInPage({
             ))}
           </ul>
           <p className="mt-3 text-xs text-[var(--mu-muted)]">
-            Seeded on first run so the marketplace is explorable. Remove them before going live.
+            Seeded on first run so the marketplace is explorable. Remove them before going live.{" "}
+            <a className="text-[var(--mu-brass)] hover:underline" href="/mintedup/apply">
+              Apply for membership
+            </a>{" "}
+            to go through the real invitation flow.
           </p>
         </div>
       </div>
 
       <div className="mu-frame h-fit rounded-xl p-6 lg:p-8">
-        <AuthForm initialMode={mode === "register" ? "register" : "login"} />
+        <AuthForm
+          initialMode={mode === "register" || code ? "register" : "login"}
+          initialCode={code}
+        />
       </div>
     </div>
   );

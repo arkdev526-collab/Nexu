@@ -11,9 +11,10 @@ export async function POST(request: Request) {
       password: str(body.password),
       displayName: str(body.displayName),
       shopName: str(body.shopName),
+      inviteCode: str(body.inviteCode),
     });
     await createSession(user.id);
-    return ok({ id: user.id, role: user.role, shop: user.shop });
+    return ok({ id: user.id, role: user.role, shop: user.shop, membership: user.membership });
   } catch (error) {
     return fail(error);
   }

@@ -1,11 +1,15 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { currentUser, destroySession } from "@/mintedup/auth";
+import { canCurate, currentUser, destroySession } from "@/mintedup/auth";
+import { PRICING, statementFor } from "@/mintedup/billing";
+import { entitlements, isShopMember } from "@/mintedup/membership";
 import { categoryName } from "@/mintedup/categories";
 import { formatDate, formatMoney, timeLeft } from "@/mintedup/format";
 import { currentBid, settleDueAuctions } from "@/mintedup/listings";
 import { ensureSeeded } from "@/mintedup/seed";
 import { read } from "@/mintedup/store";
+import { BoostToggle } from "../_components/BoostToggle";
+import { MembershipPanel } from "../_components/MembershipPanel";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Your dashboard" };
@@ -36,27 +40,34 @@ export default async function DashboardPage() {
       .slice(0, 6),
   }));
 
+  const statement = await statementFor(user.id);
+  const limits = entitlements(user);
+  const shopMember = isShopMember(user);
   const grossSales = data.sales.reduce((sum, order) => sum + order.amount, 0);
+  const boostsUsed = data.listings.filter((l) => l.boostedAt).length;
   const active = data.listings.filter((l) => l.status === "active");
-  const drafts = data.listings.filter((l) => l.status === "draft");
 
-  // One row per lot the seller is bidding on, at their current standing.
-  const biddingOn = [...new Set(data.myBids.map((b) => b.listingId))]
-    .map((listingId) => {
-      const listing = data.listings.find((l) => l.id === listingId);
-      return listing ? null : listingId;
-    })
-    .filter((id): id is string => Boolean(id));
-
+  // One row per lot the seller has bid on. Their own lots are excluded — those
+  // already appear under "Your listings", and a seller cannot bid on them.
+  const biddingOn = new Set(data.myBids.map((b) => b.listingId));
   const watchedListings = await read((db) =>
-    db.listings.filter((l) => biddingOn.includes(l.id)),
+    db.listings.filter((l) => biddingOn.has(l.id) && l.sellerId !== user.id),
+  );
+
+  const awaitingCuration = data.listings.filter(
+    (l) => l.status === "submitted" || l.status === "changes",
   );
 
   const stats = [
     { label: "Live listings", value: String(active.length) },
-    { label: "Drafts", value: String(drafts.length) },
+    { label: "With the curator", value: String(awaitingCuration.length) },
     { label: "Sold", value: String(data.sales.length) },
     { label: "Gross sales", value: formatMoney(grossSales) },
+    {
+      label: shopMember ? "Listing allowance" : "Free listings left",
+      value: shopMember ? "Unlimited" : String(user.freeListingsRemaining),
+    },
+    { label: "Fees accrued", value: formatMoney(statement.total) },
   ];
 
   return (
@@ -67,14 +78,35 @@ export default async function DashboardPage() {
             {user.role === "admin" ? "Administrator" : "Seller"}
           </p>
           <h1 className="mu-display mt-2 text-4xl">{user.shop.name}</h1>
-          <p className="mu-sans mt-1 text-sm text-[var(--mu-muted)]">
-            {user.displayName} · joined {formatDate(user.createdAt)} ·{" "}
-            <Link className="text-[var(--mu-brass)]" href={`/mintedup/shop/${user.shop.slug}`}>
-              view your shopfront
-            </Link>
+          <p className="mu-sans mt-1 flex flex-wrap items-center gap-2 text-sm text-[var(--mu-muted)]">
+            <span
+              className={`rounded-full px-2.5 py-0.5 text-[0.625rem] font-bold uppercase tracking-[0.12em] ${
+                shopMember
+                  ? "bg-[rgba(216,180,90,0.18)] text-[var(--mu-brass)]"
+                  : "bg-white/5 text-[var(--mu-muted)]"
+              }`}
+            >
+              {limits.label}
+            </span>
+            {user.verified ? (
+              <span className="rounded-full bg-[rgba(79,155,134,0.18)] px-2.5 py-0.5 text-[0.625rem] font-bold uppercase tracking-[0.12em] text-[var(--mu-verdigris)]">
+                Verified
+              </span>
+            ) : null}
+            <span>
+              {user.displayName} · joined {formatDate(user.createdAt)} ·{" "}
+              <Link className="text-[var(--mu-brass)]" href={`/mintedup/shop/${user.shop.slug}`}>
+                view your shopfront
+              </Link>
+            </span>
           </p>
         </div>
         <div className="mu-sans flex flex-wrap gap-2">
+          {canCurate(user) ? (
+            <Link className="mu-btn mu-btn-ghost" href="/mintedup/admin/curation">
+              Curation desk
+            </Link>
+          ) : null}
           <Link className="mu-btn mu-btn-ghost" href="/mintedup/dashboard/shop">
             Shop settings
           </Link>
@@ -98,6 +130,50 @@ export default async function DashboardPage() {
         ))}
       </div>
 
+      <section className="mt-10 grid gap-5 lg:grid-cols-2">
+        <div className="mu-frame rounded-xl p-6">
+          <h2 className="mu-display text-xl">Membership</h2>
+          <div className="mt-3">
+            <MembershipPanel
+              membership={user.membership}
+              subscription={PRICING.subscription}
+              freeListingsRemaining={user.freeListingsRemaining}
+            />
+          </div>
+          <p className="mu-sans mt-3 text-xs text-[var(--mu-muted)]">
+            {shopMember
+              ? `${boostsUsed} of ${limits.boostSlots} boost slots in use.`
+              : `${PRICING.listingFee}p a listing after your free five, plus 1% of the sale value.`}{" "}
+            <Link className="text-[var(--mu-brass)] hover:underline" href="/mintedup/membership">
+              Compare tiers
+            </Link>
+          </p>
+        </div>
+
+        <div className="mu-frame rounded-xl p-6">
+          <h2 className="mu-display text-xl">Fees accrued</h2>
+          <dl className="mu-sans mt-3 space-y-1.5 text-sm">
+            {[
+              ["Listing fees", statement.listingFees],
+              ["Commission", statement.commission],
+              ["Subscription", statement.subscription],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="flex justify-between gap-4">
+                <dt className="text-[var(--mu-muted)]">{label}</dt>
+                <dd className="text-[var(--mu-text)]">{formatMoney(Number(value))}</dd>
+              </div>
+            ))}
+            <div className="flex justify-between gap-4 border-t border-[var(--mu-line)] pt-2">
+              <dt className="text-[var(--mu-text)]">Total</dt>
+              <dd className="text-[var(--mu-brass)]">{formatMoney(statement.total)}</dd>
+            </div>
+          </dl>
+          <p className="mu-sans mt-3 text-xs text-[var(--mu-muted)]">
+            Accrued only — no payment is taken in this build.
+          </p>
+        </div>
+      </section>
+
       <section className="mt-12">
         <h2 className="mu-display text-2xl">Your listings</h2>
         {data.listings.length === 0 ? (
@@ -113,8 +189,8 @@ export default async function DashboardPage() {
             <table className="w-full min-w-[44rem] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-[var(--mu-line)] text-left">
-                  {["Lot", "Category", "Format", "Price", "Status", ""].map((heading) => (
-                    <th key={heading} className="mu-label pb-2">
+                  {["Lot", "Category", "Format", "Price", "Status", "Boost", ""].map((heading) => (
+                    <th key={heading} className="mu-th">
                       {heading}
                     </th>
                   ))}
@@ -161,6 +237,17 @@ export default async function DashboardPage() {
                         )}
                       </td>
                       <td className="py-3 pr-4 text-[var(--mu-muted)]">{listing.status}</td>
+                      <td className="py-3 pr-4">
+                        {listing.status === "active" ? (
+                          <BoostToggle
+                            listingId={listing.id}
+                            boosted={Boolean(listing.boostedAt)}
+                            slots={limits.boostSlots}
+                          />
+                        ) : (
+                          <span className="text-xs text-[var(--mu-muted)]">—</span>
+                        )}
+                      </td>
                       <td className="py-3 text-right">
                         <Link
                           className="text-xs text-[var(--mu-brass)]"

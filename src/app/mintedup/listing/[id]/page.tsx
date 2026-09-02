@@ -3,7 +3,14 @@ import { notFound } from "next/navigation";
 import { currentUser } from "@/mintedup/auth";
 import { categoryName, getCategory } from "@/mintedup/categories";
 import { formatDate, formatMoney, timeLeft } from "@/mintedup/format";
-import { currentBid, isLive, minimumBid, settleDueAuctions } from "@/mintedup/listings";
+import {
+  currentBid,
+  extensionSeconds,
+  isLive,
+  minimumBid,
+  settleDueAuctions,
+} from "@/mintedup/listings";
+import { refreshAuctionStatuses } from "@/mintedup/curation";
 import { ensureSeeded } from "@/mintedup/seed";
 import { read } from "@/mintedup/store";
 import { Gallery } from "../../_components/Gallery";
@@ -26,6 +33,7 @@ export async function generateMetadata({ params }: Params) {
 
 export default async function ListingPage({ params }: Params) {
   await ensureSeeded();
+  await refreshAuctionStatuses();
   await settleDueAuctions();
   const { id } = await params;
 
@@ -39,11 +47,14 @@ export default async function ListingPage({ params }: Params) {
       related: db.listings
         .filter((l) => l.id !== listing.id && l.categoryId === listing.categoryId && l.status === "active")
         .slice(0, 3),
+      auction: listing.auctionId
+        ? (db.auctions.find((a) => a.id === listing.auctionId) ?? null)
+        : null,
     };
   });
 
   if (!data || data.listing.status === "removed") notFound();
-  const { listing, seller, bids, related } = data;
+  const { listing, seller, bids, related, auction } = data;
   const viewer = await currentUser();
   const bid = currentBid(listing, bids);
   const category = getCategory(listing.categoryId);
@@ -138,8 +149,16 @@ export default async function ListingPage({ params }: Params) {
         <aside className="lg:sticky lg:top-24 lg:h-fit">
           <div className="mu-frame rounded-xl p-6">
             <p className="mu-sans text-xs uppercase tracking-[0.16em] text-[var(--mu-brass)]">
-              {listing.format === "bid" ? "Bid it — live auction" : "Buy it — fixed price"}
+              {listing.format === "bid" ? "Bid it — curated auction" : "Buy it — fixed price"}
             </p>
+            {auction ? (
+              <Link
+                className="mu-sans mt-2 inline-block text-sm text-[var(--mu-verdigris)] hover:underline"
+                href={`/mintedup/sales/${auction.id}`}
+              >
+                Part of {auction.title}
+              </Link>
+            ) : null}
             <h1 className="mu-display mt-3 text-3xl leading-tight">{listing.title}</h1>
             {listing.subtitle ? (
               <p className="mu-sans mt-2 text-[var(--mu-muted)]">{listing.subtitle}</p>
@@ -180,9 +199,25 @@ export default async function ListingPage({ params }: Params) {
                   signedIn={Boolean(viewer)}
                   isOwner={viewer?.id === listing.sellerId}
                   live={isLive(listing)}
+                  endsAt={listing.endsAt}
+                  nextExtensionSeconds={extensionSeconds(listing.extensions)}
                 />
               </>
             )}
+
+            {listing.curation.decidedAt ? (
+              <>
+                <hr className="mu-rule my-5" />
+                <div className="mu-sans rounded-lg border border-[var(--mu-line)] px-3 py-2">
+                  <p className="mu-label mb-1 text-[var(--mu-verdigris)]">Curated lot</p>
+                  <p className="text-xs leading-relaxed text-[var(--mu-muted)]">
+                    A Minted Up curator read this lot against its photographs before it was
+                    catalogued.
+                    {listing.curation.notes ? ` “${listing.curation.notes}”` : ""}
+                  </p>
+                </div>
+              </>
+            ) : null}
 
             <hr className="mu-rule my-5" />
 

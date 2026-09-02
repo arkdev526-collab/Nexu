@@ -4,7 +4,9 @@ import { currentUser } from "@/mintedup/auth";
 import { AI_AVAILABLE } from "@/mintedup/ai";
 import { CATEGORIES, categoryName, isValidCategory } from "@/mintedup/categories";
 import { formatDate } from "@/mintedup/format";
+import { PRICING } from "@/mintedup/billing";
 import { createDraft } from "@/mintedup/listings";
+import { checkQuota, isShopMember, listingAllowance } from "@/mintedup/membership";
 import { ensureSeeded } from "@/mintedup/seed";
 import { read } from "@/mintedup/store";
 import { ListingComposer } from "../_components/ListingComposer";
@@ -53,12 +55,28 @@ export default async function SellPage({
     );
     if (!listing) redirect("/mintedup/sell");
 
+    const allowance = listingAllowance(user, PRICING.listingFee);
+    const aiSeo = checkQuota(user, "aiSeo");
+    const autocomplete = checkQuota(user, "autocomplete");
+
     return (
       <div className="mx-auto w-full max-w-5xl px-5 py-10 sm:px-6 lg:px-8">
         <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="mu-sans text-xs uppercase tracking-[0.2em] text-[var(--mu-brass)]">
-              {listing.status === "draft" ? "Draft" : "Editing a live listing"}
+              {
+                {
+                  draft: "Draft",
+                  submitted: "With the curation desk",
+                  changes: "Changes requested",
+                  rejected: "Not accepted",
+                  approved: "Approved",
+                  active: "Live in the catalogue",
+                  sold: "Sold",
+                  ended: "Ended",
+                  removed: "Removed",
+                }[listing.status]
+              }
             </p>
             <h1 className="mu-display mt-2 text-4xl">
               {listing.title || "Untitled listing"}
@@ -80,14 +98,30 @@ export default async function SellPage({
           </p>
         ) : null}
 
-        <ListingComposer listing={listing} />
+        <ListingComposer
+          listing={listing}
+          context={{
+            feeReason: allowance.reason,
+            fee: allowance.fee,
+            freeListingsRemaining: user.freeListingsRemaining,
+            isShopMember: isShopMember(user),
+            aiSeoRemaining: aiSeo.remaining,
+            autocompleteRemaining: autocomplete.remaining,
+            curationNotes: listing.curation.notes,
+            changesRequested: listing.curation.changesRequested,
+            status: listing.status,
+          }}
+        />
       </div>
     );
   }
 
   const drafts = await read((db) =>
     db.listings
-      .filter((l) => l.sellerId === user.id && (l.status === "draft" || l.status === "active"))
+      .filter((l) =>
+        ["draft", "submitted", "changes", "rejected", "active"].includes(l.status),
+      )
+      .filter((l) => l.sellerId === user.id)
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
   );
 
@@ -97,6 +131,17 @@ export default async function SellPage({
       <p className="mu-sans mt-3 max-w-2xl text-[var(--mu-muted)]">
         Choose the category first — it decides which research prompts, comparable sales and buyer
         expectations the composer works from.
+      </p>
+
+      <p className="mu-sans mt-4 rounded-lg border border-[var(--mu-line)] bg-[var(--mu-surface)] px-4 py-3 text-sm text-[var(--mu-muted)]">
+        {isShopMember(user)
+          ? "Shop member — unlimited listings, no listing fee. Commission is 1% of the sale value."
+          : `${user.freeListingsRemaining} of your five free listings left. After that it is ${PRICING.listingFee}p a listing, plus 1% of the sale value. `}
+        {isShopMember(user) ? null : (
+          <Link className="text-[var(--mu-brass)] hover:underline" href="/mintedup/membership">
+            Open a shop for £20 a month
+          </Link>
+        )}
       </p>
 
       <form action={startDraft} className="mu-sans mt-8 flex flex-wrap items-end gap-3">

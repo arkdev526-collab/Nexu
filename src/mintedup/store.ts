@@ -29,6 +29,10 @@ const EMPTY: Database = {
   researchSessions: [],
   researchDocs: [],
   learningEvents: [],
+  applications: [],
+  invites: [],
+  ledger: [],
+  auctions: [],
 };
 
 type Cache = { db: Database | null; queue: Promise<unknown> };
@@ -75,15 +79,25 @@ export async function read<T>(fn: (db: Database) => T): Promise<T> {
 }
 
 /**
- * Serialised read-modify-write. Callers mutate the draft and return a value;
- * the file is rewritten once the callback resolves. Every write in the process
- * queues behind the previous one, so two concurrent bids cannot interleave.
+ * Serialised read-modify-write.
+ *
+ * The callback is handed a *copy* of the database, not the live one. A callback
+ * that mutates several records and then rejects one of them (`placeBid` on a
+ * closed lot, `publishListing` on an incomplete draft) would otherwise leave
+ * its half-finished edits in the in-memory cache, to be written out by whatever
+ * wrote next. Copy-on-write makes a failed write a true no-op.
+ *
+ * Every write in the process queues behind the previous one, so two concurrent
+ * bids cannot interleave.
  */
 export async function mutate<T>(fn: (db: Database) => T | Promise<T>): Promise<T> {
   const run = cache.queue.then(async () => {
-    const db = await load();
-    const result = await fn(db);
-    await persist(db);
+    const current = await load();
+    const draft = structuredClone(current);
+    const result = await fn(draft);
+    // Only once the callback has succeeded does the draft become the truth.
+    await persist(draft);
+    cache.db = draft;
     return result;
   });
   // Keep the chain alive even when this particular write throws.

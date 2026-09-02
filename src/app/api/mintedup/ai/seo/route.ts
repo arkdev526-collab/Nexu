@@ -1,4 +1,5 @@
 import { requireUser } from "@/mintedup/auth";
+import { consumeQuota } from "@/mintedup/quota";
 import { generateSeo, type SeoField } from "@/mintedup/ai";
 import { isValidCategory } from "@/mintedup/categories";
 import { fail, num, ok, str, strArray } from "@/mintedup/http";
@@ -15,7 +16,9 @@ const FIELDS: SeoField[] = [
  */
 export async function POST(request: Request) {
   try {
-    await requireUser();
+    const user = await requireUser();
+    // Metered on the free tier, unlimited for shop members.
+    const quota = await consumeQuota(user, "aiSeo");
     const body = await request.json();
     const field = str(body.field) as SeoField;
     if (!FIELDS.includes(field)) throw new ListingError("Unknown field.");
@@ -43,7 +46,7 @@ export async function POST(request: Request) {
       },
     });
 
-    return ok(result);
+    return ok({ ...result, quota });
   } catch (error) {
     return fail(error);
   }

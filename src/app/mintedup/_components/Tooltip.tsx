@@ -36,12 +36,16 @@ export function FieldLabel({
   tipTitle?: string;
   action?: ReactNode;
 }) {
+  // The tooltip trigger is a button, so it sits beside the <label> rather than
+  // inside it — a control nested in a label steals the label's click target.
   return (
     <div className="mb-1.5 flex items-center justify-between gap-3">
-      <label className="mu-label mb-0 flex items-center gap-1.5" htmlFor={htmlFor}>
-        {children}
+      <span className="flex items-center gap-1.5">
+        <label className="mu-label mb-0" htmlFor={htmlFor}>
+          {children}
+        </label>
         {tip ? <Tooltip label={tipTitle ?? String(children)}>{tip}</Tooltip> : null}
-      </label>
+      </span>
       {action}
     </div>
   );

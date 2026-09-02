@@ -2,7 +2,7 @@ import { currentUser } from "@/mintedup/auth";
 import { fail, ok, str } from "@/mintedup/http";
 import { recordEvent, research, tokenize } from "@/mintedup/research";
 import { ensureSeeded } from "@/mintedup/seed";
-import { read } from "@/mintedup/store";
+import { mutate, read } from "@/mintedup/store";
 
 /**
  * Ask the research gateway a question.
@@ -37,7 +37,6 @@ export async function POST(request: Request) {
         categoryId: categoryId ?? result.categories[0]?.categoryId ?? null,
       });
       if (sessionId) {
-        const { mutate } = await import("@/mintedup/store");
         await mutate((db) => {
           const session = db.researchSessions.find((s) => s.id === sessionId);
           if (!session) return;

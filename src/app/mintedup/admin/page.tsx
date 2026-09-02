@@ -1,7 +1,14 @@
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { currentUser } from "@/mintedup/auth";
+import {
+  approveApplication,
+  currentUser,
+  issueInvite,
+  rejectApplication,
+} from "@/mintedup/auth";
+import { revenueSummary } from "@/mintedup/billing";
+import { auctionsWithCounts, createAuction, refreshAuctionStatuses } from "@/mintedup/curation";
 import { CATEGORIES, categoryName } from "@/mintedup/categories";
 import { formatDate, formatMoney, parseMoney } from "@/mintedup/format";
 import { EVENT_WEIGHTS, learningStats } from "@/mintedup/research";
@@ -18,6 +25,42 @@ async function requireAdmin() {
   return user;
 }
 
+async function decideApplication(formData: FormData) {
+  "use server";
+  const admin = await requireAdmin();
+  const applicationId = String(formData.get("applicationId") ?? "");
+  const notes = String(formData.get("notes") ?? "").slice(0, 1000);
+  if (String(formData.get("decision")) === "approve") {
+    await approveApplication(applicationId, admin.id, notes);
+  } else {
+    await rejectApplication(applicationId, admin.id, notes);
+  }
+  revalidatePath("/mintedup/admin");
+}
+
+async function inviteDirect(formData: FormData) {
+  "use server";
+  const admin = await requireAdmin();
+  await issueInvite(String(formData.get("email") ?? ""), admin.id);
+  revalidatePath("/mintedup/admin");
+}
+
+async function scheduleSale(formData: FormData) {
+  "use server";
+  const admin = await requireAdmin();
+  const days = Math.max(1, Math.min(21, Number(formData.get("days") ?? 7)));
+  await createAuction({
+    title: String(formData.get("title") ?? ""),
+    strapline: String(formData.get("strapline") ?? ""),
+    description: String(formData.get("description") ?? ""),
+    categoryIds: CATEGORIES.map((c) => c.id).filter((id) => formData.get(`cat-${id}`) === "on"),
+    opensAt: new Date().toISOString(),
+    closesAt: new Date(Date.now() + days * 864e5).toISOString(),
+    curatorId: admin.id,
+  });
+  revalidatePath("/mintedup/admin");
+}
+
 async function setUserState(formData: FormData) {
   "use server";
   await requireAdmin();
@@ -29,7 +72,9 @@ async function setUserState(formData: FormData) {
     if (action === "suspend") target.suspended = true;
     if (action === "restore") target.suspended = false;
     if (action === "promote") target.role = "admin";
+    if (action === "curator") target.role = "curator";
     if (action === "demote") target.role = "user";
+    if (action === "verify") target.verified = !target.verified;
   });
   revalidatePath("/mintedup/admin");
 }
@@ -99,35 +144,56 @@ export default async function AdminPage() {
   await ensureSeeded();
   await requireAdmin();
 
+  await refreshAuctionStatuses();
   const data = await read((db) => ({
     users: db.users,
     listings: db.listings,
     orders: db.orders,
     docs: [...db.researchDocs].sort((a, b) => b.weight - a.weight),
     sessions: db.researchSessions.length,
+    applications: [...db.applications].sort(
+      (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
+    ),
+    invites: [...db.invites].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
+    queueDepth: db.listings.filter((l) => l.status === "submitted").length,
   }));
   const stats = await learningStats();
+  const revenue = await revenueSummary();
+  const sales = await auctionsWithCounts();
 
   const gross = data.orders.reduce((sum, order) => sum + order.amount, 0);
   const flagged = data.docs.filter((d) => d.tier === "community" && d.weight < -1);
 
+  const pendingApplications = data.applications.filter((a) => a.status === "pending");
+
   const tiles = [
-    { label: "Sellers", value: String(data.users.length) },
-    { label: "Live listings", value: String(data.listings.filter((l) => l.status === "active").length) },
-    { label: "Orders", value: String(data.orders.length) },
+    { label: "Shop members", value: String(revenue.shopMembers) },
+    { label: "Free members", value: String(revenue.freeMembers) },
+    { label: "Monthly recurring", value: formatMoney(revenue.monthlyRecurring) },
+    { label: "Total accrued fees", value: formatMoney(revenue.total) },
+    { label: "Commission accrued", value: formatMoney(revenue.commission) },
+    { label: "Listing fees accrued", value: formatMoney(revenue.listingFees) },
     { label: "Gross merchandise", value: formatMoney(gross) },
+    { label: "Awaiting curation", value: String(data.queueDepth) },
+    { label: "Live listings", value: String(data.listings.filter((l) => l.status === "active").length) },
+    { label: "Applications pending", value: String(pendingApplications.length) },
     { label: "Corpus documents", value: String(stats.corpusSize) },
     { label: "Learning signals", value: String(stats.events) },
-    { label: "Research sessions", value: String(data.sessions) },
-    { label: "Realised prices", value: String(stats.pricedComparables) },
   ];
 
   return (
     <div className="mx-auto w-full max-w-7xl px-5 py-12 sm:px-6 lg:px-8">
-      <h1 className="mu-display text-4xl">Minted Up administration</h1>
-      <p className="mu-sans mt-2 text-[var(--mu-muted)]">
-        Marketplace state, seller accounts and the research corpus the gateway learns from.
-      </p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="mu-display text-4xl">Minted Up administration</h1>
+          <p className="mu-sans mt-2 text-[var(--mu-muted)]">
+            Membership, revenue, curation and the research corpus the gateway learns from.
+          </p>
+        </div>
+        <Link className="mu-btn mu-btn-primary mu-sans" href="/mintedup/admin/curation">
+          Curation desk ({data.queueDepth})
+        </Link>
+      </div>
 
       <div className="mu-sans mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {tiles.map((tile) => (
@@ -148,9 +214,9 @@ export default async function AdminPage() {
           <table className="w-full min-w-[36rem] text-sm">
             <thead>
               <tr className="border-b border-[var(--mu-line)] text-left">
-                <th className="mu-label pb-2">Signal</th>
-                <th className="mu-label pb-2">Weight</th>
-                <th className="mu-label pb-2">Recorded</th>
+                <th className="mu-th">Signal</th>
+                <th className="mu-th">Weight</th>
+                <th className="mu-th">Recorded</th>
               </tr>
             </thead>
             <tbody>
@@ -171,14 +237,152 @@ export default async function AdminPage() {
         ) : null}
       </section>
 
+      <section className="mt-12 grid gap-8 lg:grid-cols-[1fr_20rem]">
+        <div>
+          <h2 className="mu-display text-2xl">Applications</h2>
+          <p className="mu-sans mt-1 text-sm text-[var(--mu-muted)]">
+            Minted Up is invite-only. Approving issues a single-use code bound to the
+            applicant&rsquo;s email address, valid for thirty days.
+          </p>
+          {data.applications.length === 0 ? (
+            <p className="mu-sans mt-4 text-sm text-[var(--mu-muted)]">No applications yet.</p>
+          ) : (
+            <div className="mu-sans mt-4 space-y-3">
+              {data.applications.slice(0, 20).map((application) => (
+                <div key={application.id} className="mu-frame rounded-lg p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="mu-display text-base">{application.name}</span>
+                    <span
+                      className={`text-xs ${
+                        application.status === "approved"
+                          ? "text-[var(--mu-verdigris)]"
+                          : application.status === "rejected"
+                            ? "text-[var(--mu-alert)]"
+                            : "text-[var(--mu-brass)]"
+                      }`}
+                    >
+                      {application.status}
+                    </span>
+                  </div>
+                  <p className="text-xs text-[var(--mu-muted)]">
+                    {application.email} · {formatDate(application.createdAt)}
+                  </p>
+                  <p className="mt-2 text-sm leading-relaxed text-[var(--mu-muted)]">
+                    {application.dealing}
+                  </p>
+                  {application.links ? (
+                    <p className="mt-1 text-xs text-[var(--mu-muted)]">{application.links}</p>
+                  ) : null}
+                  {application.status === "pending" ? (
+                    <form action={decideApplication} className="mt-3 flex flex-wrap gap-2">
+                      <input type="hidden" name="applicationId" value={application.id} />
+                      <input
+                        className="mu-input flex-1"
+                        name="notes"
+                        placeholder="Note (optional)"
+                      />
+                      <button
+                        className="mu-btn mu-btn-primary !min-h-9 !text-xs"
+                        name="decision"
+                        value="approve"
+                        type="submit"
+                      >
+                        Approve &amp; invite
+                      </button>
+                      <button
+                        className="mu-btn mu-btn-ghost !min-h-9 !text-xs"
+                        name="decision"
+                        value="reject"
+                        type="submit"
+                      >
+                        Reject
+                      </button>
+                    </form>
+                  ) : application.notes ? (
+                    <p className="mt-2 text-xs italic text-[var(--mu-muted)]">{application.notes}</p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-6">
+          <div className="mu-frame h-fit rounded-xl p-5">
+            <h3 className="mu-display text-lg">Invite directly</h3>
+            <form action={inviteDirect} className="mu-sans mt-3 space-y-2">
+              <input className="mu-input" name="email" type="email" placeholder="dealer@example.com" required />
+              <button className="mu-btn mu-btn-primary w-full" type="submit">
+                Issue invitation
+              </button>
+            </form>
+            <h4 className="mu-label mt-5">Outstanding codes</h4>
+            <ul className="mu-sans space-y-1.5 text-xs">
+              {data.invites.filter((i) => !i.usedAt).slice(0, 10).map((invite) => (
+                <li key={invite.code}>
+                  <code className="text-[var(--mu-brass)]">{invite.code}</code>
+                  <span className="ml-2 text-[var(--mu-muted)]">{invite.email}</span>
+                </li>
+              ))}
+              {data.invites.filter((i) => !i.usedAt).length === 0 ? (
+                <li className="text-[var(--mu-muted)]">None outstanding.</li>
+              ) : null}
+            </ul>
+          </div>
+
+          <div className="mu-frame h-fit rounded-xl p-5">
+            <h3 className="mu-display text-lg">Schedule a sale</h3>
+            <form action={scheduleSale} className="mu-sans mt-3 space-y-2">
+              <input className="mu-input" name="title" placeholder="Sale title" required />
+              <input className="mu-input" name="strapline" placeholder="Strapline" />
+              <textarea className="mu-input min-h-20" name="description" placeholder="What is in it" />
+              <label className="mu-label" htmlFor="sale-days">
+                Runs for (days)
+              </label>
+              <input className="mu-input" id="sale-days" name="days" type="number" defaultValue={7} min={1} max={21} />
+              <details>
+                <summary className="cursor-pointer text-xs text-[var(--mu-muted)]">
+                  Categories
+                </summary>
+                <div className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+                  {CATEGORIES.map((category) => (
+                    <label key={category.id} className="flex items-center gap-2 text-xs text-[var(--mu-muted)]">
+                      <input type="checkbox" name={`cat-${category.id}`} />
+                      {category.name}
+                    </label>
+                  ))}
+                </div>
+              </details>
+              <button className="mu-btn mu-btn-primary w-full" type="submit">
+                Schedule
+              </button>
+            </form>
+            <h4 className="mu-label mt-5">Sales</h4>
+            <ul className="mu-sans space-y-1.5 text-xs">
+              {sales.slice(0, 8).map((sale) => (
+                <li key={sale.id} className="flex justify-between gap-2">
+                  <Link className="text-[var(--mu-text)] hover:text-[var(--mu-brass)]" href={`/mintedup/sales/${sale.id}`}>
+                    {sale.title}
+                  </Link>
+                  <span className="whitespace-nowrap text-[var(--mu-muted)]">
+                    {sale.status} · {sale.liveLotCount}
+                  </span>
+                </li>
+              ))}
+              {sales.length === 0 ? <li className="text-[var(--mu-muted)]">None scheduled.</li> : null}
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <section className="mt-12">
         <h2 className="mu-display text-2xl">Sellers</h2>
         <div className="mu-sans mt-4 overflow-x-auto">
           <table className="w-full min-w-[44rem] text-sm">
             <thead>
               <tr className="border-b border-[var(--mu-line)] text-left">
-                {["Shop", "Email", "Role", "Joined", "Listings", ""].map((h) => (
-                  <th key={h} className="mu-label pb-2">
+                {["Shop", "Email", "Tier", "Role", "Free left", "Listings", ""].map((h) => (
+                  <th key={h} className="mu-th">
                     {h}
                   </th>
                 ))}
@@ -199,8 +403,26 @@ export default async function AdminPage() {
                     ) : null}
                   </td>
                   <td className="py-3 pr-4 text-[var(--mu-muted)]">{seller.email}</td>
+                  <td className="py-3 pr-4">
+                    <span
+                      className={
+                        seller.membership.tier === "shop" && seller.membership.status === "active"
+                          ? "text-[var(--mu-brass)]"
+                          : "text-[var(--mu-muted)]"
+                      }
+                    >
+                      {seller.membership.tier === "shop" ? "Shop" : "Free"}
+                    </span>
+                    {seller.verified ? (
+                      <span className="ml-1 text-[var(--mu-verdigris)]" title="Verified">
+                        ✓
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="py-3 pr-4 text-[var(--mu-muted)]">{seller.role}</td>
-                  <td className="py-3 pr-4 text-[var(--mu-muted)]">{formatDate(seller.createdAt)}</td>
+                  <td className="py-3 pr-4 text-[var(--mu-muted)]">
+                    {seller.membership.tier === "shop" ? "—" : seller.freeListingsRemaining}
+                  </td>
                   <td className="py-3 pr-4 text-[var(--mu-muted)]">
                     {data.listings.filter((l) => l.sellerId === seller.id).length}
                   </td>
@@ -218,10 +440,13 @@ export default async function AdminPage() {
                       <button
                         className="text-xs text-[var(--mu-muted)]"
                         name="action"
-                        value={seller.role === "admin" ? "demote" : "promote"}
+                        value={seller.role === "user" ? "curator" : "demote"}
                         type="submit"
                       >
-                        {seller.role === "admin" ? "Demote" : "Make admin"}
+                        {seller.role === "user" ? "Make curator" : "Demote"}
+                      </button>
+                      <button className="text-xs text-[var(--mu-verdigris)]" name="action" value="verify" type="submit">
+                        {seller.verified ? "Unverify" : "Verify"}
                       </button>
                     </form>
                   </td>
@@ -239,7 +464,7 @@ export default async function AdminPage() {
             <thead>
               <tr className="border-b border-[var(--mu-line)] text-left">
                 {["Lot", "Category", "Status", "Images", "AI fields", ""].map((h) => (
-                  <th key={h} className="mu-label pb-2">
+                  <th key={h} className="mu-th">
                     {h}
                   </th>
                 ))}
