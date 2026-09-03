@@ -4,6 +4,7 @@ import { recordEvent, tokenize } from "@/mintedup/research";
 import { researchV2 } from "@/mintedup/research-v2";
 import { ensureSeeded } from "@/mintedup/seed";
 import { assertSameOrigin, enforceRateLimit } from "@/mintedup/security";
+import { ensureVerifiedSourceSeeds } from "@/mintedup/source-seeds";
 import { mutate, read } from "@/mintedup/store";
 
 /** Research v2 query boundary. Searches may be anonymous, but every mutation is
@@ -12,6 +13,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     await ensureSeeded();
+    await ensureVerifiedSourceSeeds();
     const user = await currentUser();
     enforceRateLimit(request, "research", { limit: 60, windowMs: 60_000 }, user?.id ?? "anonymous");
 
