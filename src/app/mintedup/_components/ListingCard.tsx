@@ -32,7 +32,23 @@ export function ListingCard({
 }) {
   const cover = listing.images[0];
   const isAuction = listing.format === "bid";
-  const remaining = timeLeft(listing.endsAt);
+  const remaining = listing.status === "active" ? timeLeft(listing.endsAt) : "";
+  const stateLabel =
+    listing.status === "reserved"
+      ? "Awaiting payment"
+      : listing.status === "sold"
+        ? "Sold"
+        : listing.status === "ended"
+          ? "Unsold"
+          : isAuction
+            ? "Bid it"
+            : "Buy it";
+  const displayPrice =
+    listing.status === "sold" && listing.soldPrice
+      ? listing.soldPrice
+      : isAuction
+        ? (currentBid ?? listing.startingBid)
+        : listing.price;
 
   return (
     <Link
@@ -52,12 +68,14 @@ export function ListingCard({
         )}
         <span
           className={`mu-sans absolute left-2.5 top-2.5 rounded-full px-2.5 py-1 text-[0.625rem] font-bold uppercase tracking-[0.12em] ${
-            isAuction
-              ? "bg-[var(--mu-verdigris)] text-[#04120e]"
-              : "bg-[var(--mu-brass)] text-[#1a1206]"
+            listing.status === "reserved" || listing.status === "sold" || listing.status === "ended"
+              ? "bg-black/75 text-[var(--mu-text)]"
+              : isAuction
+                ? "bg-[var(--mu-verdigris)] text-[#04120e]"
+                : "bg-[var(--mu-brass)] text-[#1a1206]"
           }`}
         >
-          {isAuction ? "Bid it" : "Buy it"}
+          {stateLabel}
         </span>
         {isAuction && remaining ? (
           <span className="mu-sans absolute right-2.5 top-2.5 rounded-full bg-black/70 px-2.5 py-1 text-[0.625rem] font-semibold text-[var(--mu-text)]">
@@ -76,10 +94,18 @@ export function ListingCard({
         ) : null}
         <div className="mu-sans mt-auto flex items-baseline justify-between gap-2 pt-2">
           <span className="text-lg font-semibold text-[var(--mu-brass)]">
-            {formatMoney(isAuction ? (currentBid ?? listing.startingBid) : listing.price, listing.currency)}
+            {formatMoney(displayPrice, listing.currency)}
           </span>
           <span className="text-xs text-[var(--mu-muted)]">
-            {isAuction ? `${bidCount ?? 0} bid${bidCount === 1 ? "" : "s"}` : "Buy it now"}
+            {listing.status === "reserved"
+              ? "Payment pending"
+              : listing.status === "sold"
+                ? "Realised"
+                : listing.status === "ended"
+                  ? "No sale"
+                  : isAuction
+                    ? `${bidCount ?? 0} bid${bidCount === 1 ? "" : "s"}`
+                    : "Buy it now"}
           </span>
         </div>
       </div>
