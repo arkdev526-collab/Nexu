@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
-import { AuthError } from "./auth";
-import { ListingError } from "./listings";
 
 /** One error shape for every Minted Up endpoint, so the client can be dumb. */
 export function fail(error: unknown): NextResponse {
-  if (error instanceof AuthError || error instanceof ListingError) {
-    return NextResponse.json({ error: error.message }, { status: error.status });
+  // Domain errors deliberately carry an HTTP status. Keep the adapter generic
+  // so new domain modules (curation, orders, quotas, payments) do not need to be
+  // imported here just to preserve their intended 4xx response.
+  if (error instanceof Error) {
+    const status = (error as Error & { status?: unknown }).status;
+    if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) {
+      return NextResponse.json({ error: error.message }, { status });
+    }
   }
   if (error instanceof SyntaxError) {
     return NextResponse.json({ error: "Malformed request body." }, { status: 400 });
