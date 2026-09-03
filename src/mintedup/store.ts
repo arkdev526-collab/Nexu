@@ -3,16 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Database } from "./types";
 
-/**
- * File-backed JSON store.
- *
- * This is deliberately the smallest thing that gives Minted Up real,
- * persistent, transactional-enough state. Every read goes through `read()` and
- * every write through `mutate()`, so swapping the two functions for Postgres,
- * SQLite or Prisma later is a contained change — nothing above this file
- * touches the filesystem. See docs/mintedup/architecture.md.
- */
-
 const DATA_DIR = process.env.MINTEDUP_DATA_DIR
   ? path.resolve(process.env.MINTEDUP_DATA_DIR)
   : path.join(process.cwd(), ".data", "mintedup");
@@ -21,32 +11,13 @@ const DB_FILE = path.join(DATA_DIR, "db.json");
 export const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
 
 const EMPTY: Database = {
-  users: [],
-  listings: [],
-  bids: [],
-  orders: [],
-  sessions: [],
-  researchSessions: [],
-  researchDocs: [],
-  learningEvents: [],
-  applications: [],
-  invites: [],
-  ledger: [],
-  auctions: [],
+  users: [], listings: [], bids: [], orders: [], sessions: [], researchSessions: [],
+  researchDocs: [], learningEvents: [], applications: [], invites: [], ledger: [], auctions: [],
 };
 
 type Cache = { db: Database | null; queue: Promise<unknown> };
-
-// Next.js reloads modules in dev; hang the cache off globalThis so the write
-// queue is not silently forked into two competing serialisers.
-const globalCache = globalThis as typeof globalThis & {
-  __mintedUpStore?: Cache;
-};
-
-const cache: Cache = (globalCache.__mintedUpStore ??= {
-  db: null,
-  queue: Promise.resolve(),
-});
+const globalCache = globalThis as typeof globalThis & { __mintedUpStore?: Cache };
+const cache: Cache = (globalCache.__mintedUpStore ??= { db: null, queue: Promise.resolve() });
 
 export function newId(prefix: string): string {
   return `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
@@ -56,7 +27,6 @@ async function load(): Promise<Database> {
   if (cache.db) return cache.db;
   try {
     const raw = await fs.readFile(DB_FILE, "utf8");
-    // Spread over EMPTY so a db.json written by an older schema still loads.
     cache.db = { ...EMPTY, ...(JSON.parse(raw) as Partial<Database>) };
   } catch {
     cache.db = structuredClone(EMPTY);
@@ -66,43 +36,31 @@ async function load(): Promise<Database> {
 
 async function persist(db: Database): Promise<void> {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  // Write-then-rename: a crash mid-write leaves the previous db.json intact.
   const tmp = `${DB_FILE}.${process.pid}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(db, null, 2), "utf8");
   await fs.rename(tmp, DB_FILE);
 }
 
-/** Read-only view of the database. Do not mutate the result — use `mutate`. */
 export async function read<T>(fn: (db: Database) => T): Promise<T> {
   const db = await load();
   return fn(db);
 }
 
-/**
- * Serialised read-modify-write.
- *
- * The callback is handed a *copy* of the database, not the live one. A callback
- * that mutates several records and then rejects one of them (`placeBid` on a
- * closed lot, `publishListing` on an incomplete draft) would otherwise leave
- * its half-finished edits in the in-memory cache, to be written out by whatever
- * wrote next. Copy-on-write makes a failed write a true no-op.
- *
- * Every write in the process queues behind the previous one, so two concurrent
- * bids cannot interleave.
- */
 export async function mutate<T>(fn: (db: Database) => T | Promise<T>): Promise<T> {
   const run = cache.queue.then(async () => {
     const current = await load();
     const draft = structuredClone(current);
     const result = await fn(draft);
-    // Only once the callback has succeeded does the draft become the truth.
     await persist(draft);
     cache.db = draft;
     return result;
   });
-  // Keep the chain alive even when this particular write throws.
   cache.queue = run.catch(() => undefined);
   return run;
+}
+
+function safeUploadName(filename: string): boolean {
+  return /^[A-Za-z0-9_.-]+$/.test(filename) && !filename.includes("..");
 }
 
 export async function saveUpload(id: string, ext: string, bytes: Buffer): Promise<string> {
@@ -112,9 +70,17 @@ export async function saveUpload(id: string, ext: string, bytes: Buffer): Promis
   return filename;
 }
 
+export async function deleteUpload(filename: string): Promise<void> {
+  if (!safeUploadName(filename)) return;
+  try {
+    await fs.unlink(path.join(UPLOAD_DIR, filename));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
 export async function readUpload(filename: string): Promise<Buffer | null> {
-  // Defend the upload directory against traversal in the [filename] route.
-  if (!/^[A-Za-z0-9_.-]+$/.test(filename) || filename.includes("..")) return null;
+  if (!safeUploadName(filename)) return null;
   try {
     return await fs.readFile(path.join(UPLOAD_DIR, filename));
   } catch {

@@ -1,4 +1,5 @@
 import { formatMoney } from "./format";
+import { expireAwaitingPayments, paymentWindowMs } from "./orders";
 import { recordOutcome } from "./research";
 import { mutate, newId, read } from "./store";
 import type { Bid, Listing, Order } from "./types";
@@ -44,6 +45,7 @@ export function extensionSeconds(previousExtensions: number): number {
 }
 
 export async function placeBid(input: { listingId: string; bidderId: string; maxAmount: number }): Promise<{ bid: Bid; visibleAmount: number; leading: boolean; secondsAdded: number; endsAt: string | null; nextExtensionSeconds: number }> {
+  await expireAwaitingPayments();
   return mutate((db) => {
     const listing = db.listings.find((l) => l.id === input.listingId);
     if (!listing) throw new ListingError("Listing not found.", 404);
@@ -92,6 +94,7 @@ export async function placeBid(input: { listingId: string; bidderId: string; max
 
 /** Reserve a fixed-price lot without recording a realised sale. */
 export async function buyNow(input: { listingId: string; buyerId: string }): Promise<Order> {
+  await expireAwaitingPayments();
   return mutate((db) => {
     const listing = db.listings.find((l) => l.id === input.listingId);
     if (!listing) throw new ListingError("Listing not found.", 404);
@@ -99,12 +102,14 @@ export async function buyNow(input: { listingId: string; buyerId: string }): Pro
     if (!isLive(listing)) throw new ListingError("This listing is no longer available.");
     if (listing.sellerId === input.buyerId) throw new ListingError("You cannot buy your own listing.");
 
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     const order: Order = {
       id: newId("ord"), listingId: listing.id, buyerId: input.buyerId, sellerId: listing.sellerId,
       amount: listing.price, format: "buy", placedAt: now,
       status: "paid", paymentStatus: "awaiting_payment", paymentReference: null,
-      paymentConfirmedAt: null, cancelledAt: null,
+      paymentConfirmedAt: null, paymentExpiresAt: new Date(nowMs + paymentWindowMs("buy")).toISOString(),
+      cancelledAt: null,
     };
     db.orders.push(order);
     listing.reservedOrderId = order.id;
@@ -121,7 +126,8 @@ export async function settleAuction(listingId: string): Promise<Order | null> {
 
     const live = db.bids.filter((b) => b.listingId === listing.id && !b.retracted);
     const top = live.sort((a, b) => a.amount - b.amount).at(-1);
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     if (!top || top.amount < listing.reserve) {
       listing.status = "ended";
       listing.updatedAt = now;
@@ -132,7 +138,8 @@ export async function settleAuction(listingId: string): Promise<Order | null> {
       id: newId("ord"), listingId: listing.id, buyerId: top.bidderId, sellerId: listing.sellerId,
       amount: top.amount, format: "bid", placedAt: now,
       status: "paid", paymentStatus: "awaiting_payment", paymentReference: null,
-      paymentConfirmedAt: null, cancelledAt: null,
+      paymentConfirmedAt: null, paymentExpiresAt: new Date(nowMs + paymentWindowMs("bid")).toISOString(),
+      cancelledAt: null,
     };
     db.orders.push(order);
     listing.reservedOrderId = order.id;
@@ -146,6 +153,7 @@ export async function settleAuction(listingId: string): Promise<Order | null> {
 }
 
 export async function settleDueAuctions(): Promise<void> {
+  await expireAwaitingPayments();
   const due = await read((db) => db.listings
     .filter((l) => l.format === "bid" && l.status === "active" && !l.reservedOrderId && l.endsAt !== null && Date.parse(l.endsAt) <= Date.now())
     .map((l) => l.id));

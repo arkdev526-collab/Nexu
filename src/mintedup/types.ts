@@ -22,6 +22,8 @@ export type Order = {
   paymentStatus?: PaymentStatus;
   paymentReference?: string | null;
   paymentConfirmedAt?: string | null;
+  /** Deadline for resolving an unpaid reservation. Missing on legacy rows. */
+  paymentExpiresAt?: string | null;
   cancelledAt?: string | null;
 };
 
