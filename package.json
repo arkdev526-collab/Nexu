@@ -6,12 +6,21 @@
     "dev": "next dev",
     "build": "next build",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-transform-types --experimental-loader ./scripts/mintedup-ts-loader.mjs --test tests/mintedup/proof.test.mjs tests/mintedup/research-v2.test.mjs tests/mintedup/source-library.test.mjs tests/mintedup/met-ingestion.test.mjs tests/mintedup/durable-store.test.mjs",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "db:status": "node --experimental-transform-types --experimental-loader ./scripts/mintedup-ts-loader.mjs scripts/mintedup-db.mjs status",
+    "db:migrate": "node --experimental-transform-types --experimental-loader ./scripts/mintedup-ts-loader.mjs scripts/mintedup-db.mjs migrate",
+    "db:import": "node --experimental-transform-types --experimental-loader ./scripts/mintedup-ts-loader.mjs scripts/mintedup-db.mjs import",
+    "demo:images": "node scripts/demo-images.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
+    "@neondatabase/serverless": "1.1.0",
     "next": "16.2.4",
     "react": "19.2.5",
-    "react-dom": "19.2.5"
+    "react-dom": "19.2.5",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.2.4",

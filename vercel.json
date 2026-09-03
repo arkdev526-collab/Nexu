@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/mintedup/cron/source-ingestion",
+      "schedule": "17 3 * * *"
+    }
+  ]
+}

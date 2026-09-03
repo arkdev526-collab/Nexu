@@ -22,3 +22,6 @@ next-dev.*.log
 
 # local env files
 .env*
+
+# minted up runtime data (database + uploaded photographs)
+/.data
