@@ -22,9 +22,7 @@ export async function MuHeader() {
         <nav aria-label="Minted Up" className="hidden md:block">
           <ul className="mu-sans flex items-center gap-1">
             {NAV.map((item) => (
-              <li key={item.label}>
-                <Link className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--mu-muted)] transition hover:bg-[rgba(216,180,90,0.08)] hover:text-[var(--mu-text)]" href={item.href}>{item.label}</Link>
-              </li>
+              <li key={item.label}><Link className="rounded-lg px-3 py-2 text-sm font-medium text-[var(--mu-muted)] transition hover:bg-[rgba(216,180,90,0.08)] hover:text-[var(--mu-text)]" href={item.href}>{item.label}</Link></li>
             ))}
           </ul>
         </nav>
@@ -39,7 +37,10 @@ export async function MuHeader() {
                 </>
               ) : null}
               {user.role === "admin" ? (
-                <Link className="hidden rounded-lg px-3 py-2 text-sm font-medium text-[var(--mu-verdigris)] sm:inline-block" href="/mintedup/admin">Admin</Link>
+                <>
+                  <Link className="hidden rounded-lg px-3 py-2 text-sm font-medium text-[var(--mu-muted)] xl:inline-block" href="/mintedup/admin/data">Data</Link>
+                  <Link className="hidden rounded-lg px-3 py-2 text-sm font-medium text-[var(--mu-verdigris)] sm:inline-block" href="/mintedup/admin">Admin</Link>
+                </>
               ) : null}
               <Link className="mu-btn mu-btn-ghost" href="/mintedup/dashboard">{user.shop.name}</Link>
             </>
@@ -83,9 +84,7 @@ export function MuFooter() {
           <div key={column.title}>
             <p className="mu-label">{column.title}</p>
             <ul className="mu-sans space-y-2">
-              {column.links.map((link) => (
-                <li key={link.href + link.label}><Link className="text-sm text-[var(--mu-muted)] transition hover:text-[var(--mu-brass)]" href={link.href}>{link.label}</Link></li>
-              ))}
+              {column.links.map((link) => <li key={link.href + link.label}><Link className="text-sm text-[var(--mu-muted)] transition hover:text-[var(--mu-brass)]" href={link.href}>{link.label}</Link></li>)}
             </ul>
           </div>
         ))}

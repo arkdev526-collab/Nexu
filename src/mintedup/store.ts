@@ -2,6 +2,18 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Database } from "./types";
+import {
+  configuredStoreBackend,
+  postgresAutoMigrate,
+  postgresConnectionString,
+  storeConfigSummary,
+} from "./store-config";
+import { createPostgresStateStore, DurableStoreError } from "./store-postgres";
+import {
+  EMPTY_DATABASE,
+  invalidateDerivedResearchCaches,
+  normaliseDatabase,
+} from "./store-shared";
 
 const DATA_DIR = process.env.MINTEDUP_DATA_DIR
   ? path.resolve(process.env.MINTEDUP_DATA_DIR)
@@ -10,75 +22,175 @@ const DATA_DIR = process.env.MINTEDUP_DATA_DIR
 const DB_FILE = path.join(DATA_DIR, "db.json");
 export const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
 
-const EMPTY: Database = {
-  users: [], listings: [], bids: [], orders: [], sessions: [], researchSessions: [],
-  researchDocs: [], sourceRecords: [], learningEvents: [], applications: [], invites: [], ledger: [], auctions: [],
+type FileCache = { db: Database | null; queue: Promise<unknown> };
+const globalCache = globalThis as typeof globalThis & {
+  __mintedUpFileStore?: FileCache;
+  __mintedUpPostgresStore?: ReturnType<typeof createPostgresStateStore>;
 };
-
-type Cache = { db: Database | null; queue: Promise<unknown> };
-const globalCache = globalThis as typeof globalThis & { __mintedUpStore?: Cache };
-const cache: Cache = (globalCache.__mintedUpStore ??= { db: null, queue: Promise.resolve() });
-
-type DerivedResearchCaches = typeof globalThis & {
-  __mintedUpIndex?: unknown;
-  __mintedUpResearchV2Index?: unknown;
-};
-
-function invalidateDerivedCaches(): void {
-  const derived = globalThis as DerivedResearchCaches;
-  derived.__mintedUpIndex = undefined;
-  derived.__mintedUpResearchV2Index = undefined;
-}
+const fileCache: FileCache = (globalCache.__mintedUpFileStore ??= {
+  db: null,
+  queue: Promise.resolve(),
+});
 
 export function newId(prefix: string): string {
   return `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
 
-async function load(): Promise<Database> {
-  if (cache.db) return cache.db;
+async function loadFile(): Promise<Database> {
+  if (fileCache.db) return fileCache.db;
   try {
     const raw = await fs.readFile(DB_FILE, "utf8");
-    cache.db = { ...EMPTY, ...(JSON.parse(raw) as Partial<Database>) };
-  } catch {
-    cache.db = structuredClone(EMPTY);
+    fileCache.db = normaliseDatabase(JSON.parse(raw));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    fileCache.db = structuredClone(EMPTY_DATABASE);
   }
-  return cache.db;
+  return fileCache.db;
 }
 
-async function persist(db: Database): Promise<void> {
+async function persistFile(db: Database): Promise<void> {
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tmp = `${DB_FILE}.${process.pid}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(db, null, 2), "utf8");
   await fs.rename(tmp, DB_FILE);
 }
 
+function postgresStore() {
+  if (globalCache.__mintedUpPostgresStore) return globalCache.__mintedUpPostgresStore;
+  const connectionString = postgresConnectionString();
+  if (!connectionString) {
+    throw new DurableStoreError(
+      "MINTEDUP_STORE_BACKEND=postgres is set, but no valid MINTEDUP_DATABASE_URL, DATABASE_URL or POSTGRES_URL is configured.",
+    );
+  }
+  globalCache.__mintedUpPostgresStore = createPostgresStateStore({
+    connectionString,
+    autoMigrate: postgresAutoMigrate(),
+  });
+  return globalCache.__mintedUpPostgresStore;
+}
+
 export async function read<T>(fn: (db: Database) => T): Promise<T> {
-  const db = await load();
+  if (configuredStoreBackend() === "postgres") return postgresStore().read(fn);
+  const db = await loadFile();
   return fn(db);
 }
 
 export async function mutate<T>(fn: (db: Database) => T | Promise<T>): Promise<T> {
-  const run = cache.queue.then(async () => {
-    const current = await load();
+  if (configuredStoreBackend() === "postgres") return postgresStore().mutate(fn);
+
+  const run = fileCache.queue.then(async () => {
+    const current = await loadFile();
     const draft = structuredClone(current);
     const result = await fn(draft);
-    await persist(draft);
-    cache.db = draft;
-    // Research indexes are derived state. Any successful database mutation can
-    // change source metadata, terms, feedback or prices without changing row
-    // count, so invalidate rather than trying to guess whether a signature is
-    // still safe. Production DB search/indexing will replace this prototype.
-    invalidateDerivedCaches();
+    await persistFile(draft);
+    fileCache.db = draft;
+    invalidateDerivedResearchCaches();
     return result;
   });
-  cache.queue = run.catch(() => undefined);
+  fileCache.queue = run.catch(() => undefined);
   return run;
+}
+
+export async function storageStatus(): Promise<{
+  backend: "file" | "postgres";
+  durable: boolean;
+  configured: boolean;
+  ready: boolean;
+  revision: number | null;
+  updatedAt: string | null;
+  autoMigrate: boolean;
+  uploadsDurable: boolean;
+  message: string;
+}> {
+  const config = storeConfigSummary();
+  if (config.backend === "file") {
+    let updatedAt: string | null = null;
+    try {
+      updatedAt = (await fs.stat(DB_FILE)).mtime.toISOString();
+    } catch {
+      // No file yet is a valid empty local-development state.
+    }
+    return {
+      backend: "file",
+      durable: false,
+      configured: true,
+      ready: true,
+      revision: null,
+      updatedAt,
+      autoMigrate: false,
+      uploadsDurable: false,
+      message: "Local file store is active. Suitable for development only.",
+    };
+  }
+
+  if (!config.hasConnectionString) {
+    return {
+      backend: "postgres",
+      durable: false,
+      configured: false,
+      ready: false,
+      revision: null,
+      updatedAt: null,
+      autoMigrate: config.autoMigrate,
+      uploadsDurable: false,
+      message: "Postgres backend selected but no valid connection string is configured.",
+    };
+  }
+
+  try {
+    const status = await postgresStore().status();
+    return {
+      backend: "postgres",
+      durable: true,
+      configured: true,
+      ready: status.ready,
+      revision: status.revision,
+      updatedAt: status.updatedAt,
+      autoMigrate: config.autoMigrate,
+      uploadsDurable: false,
+      message: status.ready
+        ? "Shared Postgres state is active. Listing image bytes still require object storage."
+        : "Postgres is configured but the Minted Up state row is unavailable.",
+    };
+  } catch (error) {
+    return {
+      backend: "postgres",
+      durable: true,
+      configured: true,
+      ready: false,
+      revision: null,
+      updatedAt: null,
+      autoMigrate: config.autoMigrate,
+      uploadsDurable: false,
+      message: error instanceof Error ? error.message : "Postgres health check failed.",
+    };
+  }
+}
+
+export async function migrateFileSnapshotToPostgres(input: {
+  file?: string;
+  connectionString?: string;
+  force?: boolean;
+}) {
+  const filename = input.file ? path.resolve(input.file) : DB_FILE;
+  const raw = await fs.readFile(filename, "utf8");
+  const snapshot = normaliseDatabase(JSON.parse(raw));
+  const connectionString = input.connectionString ?? postgresConnectionString();
+  if (!connectionString) throw new DurableStoreError("A Postgres connection string is required for migration.");
+  const store = createPostgresStateStore({ connectionString, autoMigrate: true });
+  const result = await store.replaceSnapshot(snapshot, { onlyIfEmpty: !input.force });
+  return { ...result, sourceFile: filename };
 }
 
 function safeUploadName(filename: string): boolean {
   return /^[A-Za-z0-9_.-]+$/.test(filename) && !filename.includes("..");
 }
 
+/**
+ * Upload bytes remain filesystem-backed for now. The database cutover is a
+ * separate concern from the object-storage release gate.
+ */
 export async function saveUpload(id: string, ext: string, bytes: Buffer): Promise<string> {
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
   const filename = `${id}.${ext}`;

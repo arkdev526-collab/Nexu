@@ -1,5 +1,6 @@
 import { findDuplicateCandidates, materialiseSourceRecord, createSourceRecord } from "./source-library";
 import { read } from "./store";
+import { durableStoreConfigured } from "./store-config";
 import {
   collectMetObjects,
   getMetProfile,
@@ -97,8 +98,8 @@ export function scheduledIngestionGate(env: NodeJS.ProcessEnv = process.env): { 
   if (env.MINTEDUP_CRON_PRIMARY !== "1") {
     return { enabled: false, reason: "this deployment is not the designated primary cron project" };
   }
-  if (env.MINTEDUP_DURABLE_STORE !== "1") {
-    return { enabled: false, reason: "durable shared storage is not enabled" };
+  if (!durableStoreConfigured(env)) {
+    return { enabled: false, reason: "shared Postgres storage is not configured" };
   }
   return { enabled: true, reason: "ready" };
 }
