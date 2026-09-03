@@ -4,6 +4,7 @@ import { isValidCategory } from "@/mintedup/categories";
 import { learningStats } from "@/mintedup/research";
 import { researchV2 } from "@/mintedup/research-v2";
 import { ensureSeeded } from "@/mintedup/seed";
+import { ensureVerifiedSourceSeeds } from "@/mintedup/source-seeds";
 import { ResearchWorkbenchV2 } from "../_components/ResearchWorkbenchV2";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,7 @@ export default async function ResearchPage({
   searchParams: Promise<{ q?: string; category?: string }>;
 }) {
   await ensureSeeded();
+  await ensureVerifiedSourceSeeds();
   const user = await currentUser();
   const params = await searchParams;
   const stats = await learningStats();
@@ -34,7 +36,7 @@ export default async function ResearchPage({
         <p className="mu-sans text-xs uppercase tracking-[0.24em] text-[var(--mu-brass)]">Research v2 · evidence first</p>
         <h1 className="mu-display mt-3 text-4xl">Research the object, not just the keywords</h1>
         <p className="mu-sans mt-4 leading-relaxed text-[var(--mu-muted)]">
-          Minted Up now separates source authority, physical comparability and market evidence. Marks, maker, form, material, period, condition, scale and provenance can outweigh a superficially similar title, while asking prices are kept out of realised-value guidance.
+          Minted Up separates source authority, physical comparability and market evidence. Marks, maker, form, material, period, condition, scale and provenance can outweigh a superficially similar title, while asking prices are kept out of realised-value guidance.
         </p>
         <p className="mu-sans mt-3 text-sm text-[var(--mu-muted)]">
           {stats.corpusSize} documents · {stats.pricedComparables} realised prices · {stats.events} learning signals ·{" "}
