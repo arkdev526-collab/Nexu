@@ -43,7 +43,10 @@ export default async function DashboardPage() {
   const statement = await statementFor(user.id);
   const limits = entitlements(user);
   const shopMember = isShopMember(user);
-  const grossSales = data.sales.reduce((sum, order) => sum + order.amount, 0);
+  const realisedSales = data.sales.filter(
+    (order) => order.status === "paid" || order.status === "shipped" || order.status === "delivered",
+  );
+  const grossSales = realisedSales.reduce((sum, order) => sum + order.amount, 0);
   const boostsUsed = data.listings.filter((l) => l.boostedAt).length;
   const active = data.listings.filter((l) => l.status === "active");
 
@@ -61,7 +64,7 @@ export default async function DashboardPage() {
   const stats = [
     { label: "Live listings", value: String(active.length) },
     { label: "With the curator", value: String(awaitingCuration.length) },
-    { label: "Sold", value: String(data.sales.length) },
+    { label: "Sold", value: String(realisedSales.length) },
     { label: "Gross sales", value: formatMoney(grossSales) },
     {
       label: shopMember ? "Listing allowance" : "Free listings left",
@@ -199,6 +202,7 @@ export default async function DashboardPage() {
               <tbody>
                 {data.listings.map((listing) => {
                   const bid = currentBid(listing, data.bids);
+                  const editable = ["draft", "changes", "rejected"].includes(listing.status);
                   return (
                     <tr key={listing.id} className="border-b border-[var(--mu-line)]">
                       <td className="py-3 pr-4">
@@ -249,12 +253,16 @@ export default async function DashboardPage() {
                         )}
                       </td>
                       <td className="py-3 text-right">
-                        <Link
-                          className="text-xs text-[var(--mu-brass)]"
-                          href={`/mintedup/sell?draft=${listing.id}`}
-                        >
-                          Edit
-                        </Link>
+                        {editable ? (
+                          <Link
+                            className="text-xs text-[var(--mu-brass)]"
+                            href={`/mintedup/sell?draft=${listing.id}`}
+                          >
+                            Edit
+                          </Link>
+                        ) : (
+                          <span className="text-xs text-[var(--mu-muted)]">Locked</span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -292,9 +300,11 @@ export default async function DashboardPage() {
                           ? leading
                             ? "Won"
                             : "Lost"
-                          : leading
-                            ? "Leading"
-                            : "Outbid"}
+                          : listing.status === "reserved" && leading
+                            ? "Awaiting payment"
+                            : leading
+                              ? "Leading"
+                              : "Outbid"}
                       </span>
                     </span>
                   </Link>
@@ -307,12 +317,12 @@ export default async function DashboardPage() {
 
       {data.purchases.length > 0 ? (
         <section className="mt-12">
-          <h2 className="mu-display text-2xl">Bought</h2>
+          <h2 className="mu-display text-2xl">Orders</h2>
           <ul className="mu-sans mt-4 space-y-2 text-sm">
             {data.purchases.map((order) => (
               <li key={order.id} className="mu-frame rounded-xl px-4 py-3">
                 <Link className="text-[var(--mu-text)]" href={`/mintedup/listing/${order.listingId}`}>
-                  {formatMoney(order.amount)} · {formatDate(order.placedAt)} · {order.status}
+                  {formatMoney(order.amount)} · {formatDate(order.placedAt)} · {order.status.replaceAll("_", " ")}
                 </Link>
               </li>
             ))}
