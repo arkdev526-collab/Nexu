@@ -1,0 +1,45 @@
+name: Minted Up CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - claude/minted-up-marketplace-13sn7o
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mintedup-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint, typecheck, production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      MINTEDUP_DATA_DIR: ${{ runner.temp }}/mintedup
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
