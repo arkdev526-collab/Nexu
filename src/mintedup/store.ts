@@ -12,7 +12,7 @@ export const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
 
 const EMPTY: Database = {
   users: [], listings: [], bids: [], orders: [], sessions: [], researchSessions: [],
-  researchDocs: [], learningEvents: [], applications: [], invites: [], ledger: [], auctions: [],
+  researchDocs: [], sourceRecords: [], learningEvents: [], applications: [], invites: [], ledger: [], auctions: [],
 };
 
 type Cache = { db: Database | null; queue: Promise<unknown> };
