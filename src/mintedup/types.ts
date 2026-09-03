@@ -174,10 +174,12 @@ export type Order = {
   format: ListingFormat;
   placedAt: string;
   status: OrderStatus;
-  /** Processor transaction/reference. Null until payment is confirmed. */
-  paymentReference: string | null;
-  paymentConfirmedAt: string | null;
-  cancelledAt: string | null;
+  /** Processor transaction/reference. Optional for pre-Trust-Core stored rows. */
+  paymentReference?: string | null;
+  /** Payment confirmation timestamp. Optional for pre-Trust-Core stored rows. */
+  paymentConfirmedAt?: string | null;
+  /** Cancellation timestamp. Optional for pre-Trust-Core stored rows. */
+  cancelledAt?: string | null;
 };
 
 export type ListingAttributes = {
