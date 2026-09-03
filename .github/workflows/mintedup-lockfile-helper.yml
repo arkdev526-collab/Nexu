@@ -1,0 +1,36 @@
+name: Minted Up lockfile helper
+
+on:
+  push:
+    branches:
+      - claude/minted-up-marketplace-13sn7o
+    paths:
+      - .github/workflows/mintedup-lockfile-helper.yml
+
+permissions:
+  contents: write
+
+jobs:
+  generate-lockfile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: claude/minted-up-marketplace-13sn7o
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Generate reproducible Neon dependency lockfile
+        run: npm install @neondatabase/serverless@1.1.0 --save-exact --package-lock-only
+      - name: Commit generated manifest and lockfile
+        run: |
+          if git diff --quiet -- package.json package-lock.json; then
+            echo "No dependency changes required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "Install Neon serverless driver"
+          git push origin HEAD:claude/minted-up-marketplace-13sn7o
