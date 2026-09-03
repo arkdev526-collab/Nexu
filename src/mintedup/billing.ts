@@ -7,15 +7,14 @@ import type { LedgerEntry, User } from "./types";
  *
  * IMPORTANT: nothing in this file moves money. Every function records what is
  * owed so the arithmetic is right and auditable the day a payment processor is
- * wired in — `docs/mintedup/README.md` lists that as the first job before
- * launch. Charging is deliberately concentrated here rather than sprinkled
- * through the listing and order code.
+ * wired in. Entries that are tied to one business event are idempotent: retrying
+ * a curation approval or payment callback must not charge twice.
  */
 
 export const PRICING = {
   /** Per published listing, in minor units. Waived for shop members. */
   listingFee: 5,
-  /** Taken from the hammer price or buy-it-now price on every sale. */
+  /** Taken from the hammer price or buy-it-now price on every confirmed sale. */
   commissionRate: 0.01,
   /** Shop subscription, per month, in minor units. */
   subscription: 2000,
@@ -25,7 +24,7 @@ export const PRICING = {
 export function describePricing(): string[] {
   return [
     `${PRICING.listingFee}p per listing, waived entirely for shop members.`,
-    `${(PRICING.commissionRate * 100).toFixed(0)}% of the total sale value, on every sale.`,
+    `${(PRICING.commissionRate * 100).toFixed(0)}% of the total sale value, on every confirmed sale.`,
     `£${(PRICING.subscription / 100).toFixed(0)} a month for a shop, cancel any time.`,
   ];
 }
@@ -36,69 +35,89 @@ export function commissionOn(amount: number): number {
   return Math.max(1, Math.round(amount * PRICING.commissionRate));
 }
 
-async function post(entry: Omit<LedgerEntry, "id" | "createdAt" | "currency">): Promise<LedgerEntry> {
-  const row: LedgerEntry = {
+function ledgerRow(
+  entry: Omit<LedgerEntry, "id" | "createdAt" | "currency">,
+): LedgerEntry {
+  return {
     ...entry,
     id: newId("led"),
     currency: PRICING.currency,
     createdAt: new Date().toISOString(),
   };
-  await mutate((db) => {
-    db.ledger.push(row);
-  });
-  return row;
 }
 
 /**
- * Charge for publishing. Consumes a free-tier taster listing where one is left,
- * and records a zero-value entry when it does so the seller can see the
- * allowance being spent rather than wondering where it went.
+ * Charge for publishing. The allowance decrement and ledger write are one
+ * serialised mutation so a crash/retry cannot spend the allowance without the
+ * matching statement row, or vice versa.
  */
 export async function chargeListingFee(user: User, listingId: string): Promise<LedgerEntry> {
-  const allowance = listingAllowance(user, PRICING.listingFee);
+  return mutate((db) => {
+    const existing = db.ledger.find(
+      (entry) => entry.kind === "listing_fee" && entry.listingId === listingId,
+    );
+    if (existing) return structuredClone(existing);
 
-  if (allowance.fee === 0 && !entitlements(user).listingFeeWaived) {
-    await mutate((db) => {
-      const record = db.users.find((u) => u.id === user.id);
-      if (record && record.freeListingsRemaining > 0) record.freeListingsRemaining -= 1;
+    const record = db.users.find((candidate) => candidate.id === user.id) ?? user;
+    const allowance = listingAllowance(record, PRICING.listingFee);
+
+    if (allowance.fee === 0 && !entitlements(record).listingFeeWaived) {
+      const stored = db.users.find((candidate) => candidate.id === user.id);
+      if (stored && stored.freeListingsRemaining > 0) stored.freeListingsRemaining -= 1;
+    }
+
+    const row = ledgerRow({
+      userId: user.id,
+      kind: "listing_fee",
+      amount: allowance.fee,
+      description: allowance.reason,
+      listingId,
+      orderId: null,
     });
-  }
-
-  return post({
-    userId: user.id,
-    kind: "listing_fee",
-    amount: allowance.fee,
-    description: allowance.reason,
-    listingId,
-    orderId: null,
+    db.ledger.push(row);
+    return structuredClone(row);
   });
 }
 
+/** One commission row per order, even if a provider webhook is retried. */
 export async function chargeCommission(input: {
   sellerId: string;
   orderId: string;
   listingId: string;
   amount: number;
 }): Promise<LedgerEntry> {
-  const fee = commissionOn(input.amount);
-  return post({
-    userId: input.sellerId,
-    kind: "commission",
-    amount: fee,
-    description: `${(PRICING.commissionRate * 100).toFixed(0)}% commission on a sale of £${(input.amount / 100).toFixed(2)}.`,
-    listingId: input.listingId,
-    orderId: input.orderId,
+  return mutate((db) => {
+    const existing = db.ledger.find(
+      (entry) => entry.kind === "commission" && entry.orderId === input.orderId,
+    );
+    if (existing) return structuredClone(existing);
+
+    const fee = commissionOn(input.amount);
+    const row = ledgerRow({
+      userId: input.sellerId,
+      kind: "commission",
+      amount: fee,
+      description: `${(PRICING.commissionRate * 100).toFixed(0)}% commission on a confirmed sale of £${(input.amount / 100).toFixed(2)}.`,
+      listingId: input.listingId,
+      orderId: input.orderId,
+    });
+    db.ledger.push(row);
+    return structuredClone(row);
   });
 }
 
 export async function chargeSubscription(userId: string, months = 1): Promise<LedgerEntry> {
-  return post({
-    userId,
-    kind: "subscription",
-    amount: PRICING.subscription * months,
-    description: `Shop membership, ${months} month${months === 1 ? "" : "s"}.`,
-    listingId: null,
-    orderId: null,
+  return mutate((db) => {
+    const row = ledgerRow({
+      userId,
+      kind: "subscription",
+      amount: PRICING.subscription * months,
+      description: `Shop membership, ${months} month${months === 1 ? "" : "s"}.`,
+      listingId: null,
+      orderId: null,
+    });
+    db.ledger.push(row);
+    return structuredClone(row);
   });
 }
 
@@ -130,7 +149,7 @@ export async function statementFor(userId: string): Promise<Statement> {
   };
 }
 
-/** Platform-wide revenue, for the admin backend. */
+/** Platform-wide accrued revenue, for the admin backend. */
 export async function revenueSummary(): Promise<{
   listingFees: number;
   commission: number;
