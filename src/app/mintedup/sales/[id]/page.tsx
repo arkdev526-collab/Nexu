@@ -38,7 +38,9 @@ export default async function SalePage({ params }: Params) {
   if (!data) notFound();
   const { sale, lots, bids } = data;
   const liveLots = lots.filter((l) => l.status === "active");
+  const reservedLots = lots.filter((l) => l.status === "reserved");
   const soldLots = lots.filter((l) => l.status === "sold");
+  const endedLots = lots.filter((l) => l.status === "ended");
 
   return (
     <div className="mx-auto w-full max-w-7xl px-5 py-12 sm:px-6 lg:px-8">
@@ -62,8 +64,12 @@ export default async function SalePage({ params }: Params) {
           {sale.description}
         </p>
         <p className="mu-sans mt-4 text-sm text-[var(--mu-muted)]">
-          {liveLots.length} lot{liveLots.length === 1 ? "" : "s"}
-          {soldLots.length > 0 ? ` · ${soldLots.length} sold` : ""} ·{" "}
+          {liveLots.length} live lot{liveLots.length === 1 ? "" : "s"}
+          {reservedLots.length > 0
+            ? ` · ${reservedLots.length} awaiting payment`
+            : ""}
+          {soldLots.length > 0 ? ` · ${soldLots.length} sold` : ""}
+          {endedLots.length > 0 ? ` · ${endedLots.length} unsold` : ""} ·{" "}
           {sale.status === "closed"
             ? `closed ${formatDate(sale.closesAt)}`
             : `closes ${formatDate(sale.closesAt)}`}
@@ -88,7 +94,7 @@ export default async function SalePage({ params }: Params) {
         </p>
       ) : (
         <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {[...liveLots, ...soldLots].map((lot) => {
+          {[...liveLots, ...reservedLots, ...soldLots, ...endedLots].map((lot) => {
             const bid = currentBid(lot, bids);
             return (
               <ListingCard key={lot.id} listing={lot} currentBid={bid.amount} bidCount={bid.count} />
