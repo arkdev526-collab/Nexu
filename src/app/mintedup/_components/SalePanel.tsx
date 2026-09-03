@@ -41,7 +41,7 @@ export function SalePanel({
   if (!live) {
     return (
       <p className="mu-sans rounded-lg border border-[var(--mu-line)] px-4 py-3 text-sm text-[var(--mu-muted)]">
-        This lot is closed.
+        This lot is closed or reserved.
       </p>
     );
   }
@@ -95,7 +95,7 @@ export function SalePanel({
                 ? `You are the leading bidder at ${formatMoney(body.visibleAmount, currency)}.`
                 : `You were outbid — the standing proxy took it to ${formatMoney(body.visibleAmount, currency)}.`
             } The clock gained ${body.secondsAdded}s; the next bid adds ${body.nextExtensionSeconds}s.`
-          : "Bought. It is in your dashboard.",
+          : "Reserved for you. Payment is still required; this build does not take money automatically yet.",
     });
     router.refresh();
   }
@@ -136,8 +136,14 @@ export function SalePanel({
       )}
 
       <button className="mu-btn mu-btn-primary w-full" type="button" onClick={act} disabled={busy}>
-        {busy ? "Working…" : format === "bid" ? "Place bid" : "Buy it now"}
+        {busy ? "Working…" : format === "bid" ? "Place bid" : "Reserve & continue"}
       </button>
+
+      {format === "buy" ? (
+        <p className="text-xs text-[var(--mu-muted)]">
+          Reserving removes the lot from sale. It is only recorded as sold after payment is confirmed.
+        </p>
+      ) : null}
 
       {message ? (
         <p
