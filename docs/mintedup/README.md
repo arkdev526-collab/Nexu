@@ -1,225 +1,240 @@
 # Minted Up
 
-An invitation-only, curated marketplace and research gateway for antiques and
-collectibles. It lives inside the Nexu Apps Next.js app under `/mintedup`, with its own
-chrome, theme and data — nothing is shared with the Nexu marketing site except the
-framework.
+Minted Up is an invitation-only, curated marketplace and research gateway for antiques and collectibles. It lives inside the Nexu Apps Next.js application under `/mintedup`, with its own chrome, theme and data. The existing Nexu site shares the framework, not Minted Up's product surface or marketplace state.
 
-Two things define it commercially: **nobody can simply join**, and **nothing publishes
-itself**. Sellers are admitted by invitation after a curator reads their application, and
-every lot is read by a curator before it reaches the catalogue.
+Two rules define the marketplace: **nobody simply joins**, and **nothing publishes itself**. Sellers are admitted by invitation after curation, and every lot is reviewed before it enters the catalogue.
 
 ## What is here
 
 | Area | Route | Notes |
 | --- | --- | --- |
-| Home | `/mintedup` | Three doors: buy it, bid it, research it |
+| Home | `/mintedup` | Buy it, bid it, research it |
 | Catalogue | `/mintedup/browse` | Category, format, search and sort |
+| Curated sales | `/mintedup/sales` | Scheduled auction-room style sales |
 | Lot | `/mintedup/listing/[id]` | Gallery, condition report, buy/bid panel |
-| Listing composer | `/mintedup/sell` | 30 image slots, AI SEO buttons, beta auto-complete |
-| Research gateway | `/mintedup/research` | The learning engine, described below |
-| Seller dashboard | `/mintedup/dashboard` | Listings, bids, sales, saved research |
-| Shop settings | `/mintedup/dashboard/shop` | Shopfront, specialisms, policies |
-| Shopfront | `/mintedup/shop/[slug]` | The seller's public page |
-| Admin | `/mintedup/admin` | Sellers, listings, research corpus, learning telemetry |
-| Standards | `/mintedup/standards` | The photography standard and how the learning works |
+| Listing composer | `/mintedup/sell` | 30 image slots, AI SEO, beta auto-complete |
+| Research gateway | `/mintedup/research` | Evidence-led learning engine |
+| Seller dashboard | `/mintedup/dashboard` | Listings, bids, orders, fees, research |
+| Shop settings | `/mintedup/dashboard/shop` | Shopfront, specialisms and policies |
+| Shopfront | `/mintedup/shop/[slug]` | Seller's public page |
+| Admin | `/mintedup/admin` | Accounts, listings, research and telemetry |
+| Curation | `/mintedup/admin/curation` | Specialist review queue |
+| Standards | `/mintedup/standards` | Photography and marketplace standards |
 
-## Running it
-
-```bash
-npm install
-npm run dev            # http://localhost:3000/mintedup
-```
-
-The database seeds itself on first request: a curated research corpus, a live curated
-sale, four demo accounts (admin, curator, shop member, free member) and four catalogued
-lots. Demo credentials are printed on `/mintedup/signin` — **delete them before going
-live.**
-
-Optional:
+## Running and checking it
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...   # turns on the real AI SEO and auto-complete
-export MINTEDUP_DATA_DIR=/var/lib/mintedup   # defaults to ./.data/mintedup
+npm ci
+npm run dev
 ```
 
-The seeded lots start without photographs. To put catalogue plates on them:
+Minted Up is available at `http://localhost:3000/mintedup`.
+
+Run the complete local quality gate with:
 
 ```bash
-npm i -D playwright && npx playwright install chromium   # once; renderer only
-npm run demo:images                                      # with the dev server running
+npm run check
 ```
 
-The plates are **drawn, not photographed** (`scripts/demo-art.mjs`) so nothing in
-the demo could be mistaken for a real object's condition. They are uploaded
-through the ordinary image endpoint and graded by the same standard as a
-seller's own photographs — a useful property, since a flat vector render fails
-the bytes-per-pixel check outright and only passes once it carries the grain a
-real studio plate has.
+That runs lint, TypeScript checking and a production Next.js build. The repository also contains `.github/workflows/mintedup-ci.yml` so pull requests can prove the same gates in GitHub Actions.
 
-Without an API key the AI features fall back to a deterministic local generator built
-from the fields the seller has filled in, and say so in the UI. Everything else works.
+The database seeds itself on first request with a curated research corpus, a curated sale, demo accounts and demo lots. Demo credentials are shown on `/mintedup/signin`. **Demo accounts and credentials must not ship to production.**
+
+Optional environment variables:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+export MINTEDUP_DATA_DIR=/var/lib/mintedup
+```
+
+Without an Anthropic API key, AI features use the deterministic local fallback built from seller-supplied facts. Marketplace mechanics do not depend on a remote AI service.
+
+### Demo catalogue plates
+
+The seeded lots can be given deliberately drawn catalogue plates:
+
+```bash
+npm i -D playwright
+npx playwright install chromium
+npm run demo:images
+```
+
+The plates are drawn rather than photographs so demo imagery cannot be mistaken for evidence of a real object's condition. They pass through the normal upload and image-quality gates rather than bypassing them.
 
 ## Architecture
 
-```
-src/mintedup/            domain layer, no React
-  types.ts               every entity
-  store.ts               JSON store: read() / mutate(), atomic writes, serialised
-  auth.ts                scrypt passwords, HttpOnly session cookies, roles
-  categories.ts          the taxonomy — antiques and collectibles only
-  images.ts              the high-end image gate
-  listings.ts            proxy auctions, buy-it-now, the closing countdown, settlement
-  membership.ts          tiers and entitlements — the only place packaging is decided
-  billing.ts             fees and the ledger — the only place charging happens
-  quota.ts               metered AI features (writes; membership.ts stays pure)
-  curation.ts            the submission queue, curator decisions, curated sales
-  curation-rules.ts      curation constants, importable from client components
-  research.ts            the learning engine
-  ai.ts                  Claude integration + local fallbacks
-  seed.ts                first-run corpus and demo data
-src/app/mintedup/        pages and co-located components
-src/app/api/mintedup/    route handlers
-```
+```text
+src/mintedup/
+  types.ts               domain entities and state machines
+  store.ts               JSON store: read/mutate, copy-on-write, atomic persistence
+  auth.ts                scrypt passwords, sessions, roles, applications and invites
+  categories.ts          antiques/collectibles taxonomy
+  images.ts              server-side image-quality gate
+  listings.ts            drafts, fixed-price reservations, proxy bidding, settlement
+  orders.ts              payment finalisation boundary and unpaid-order cancellation
+  membership.ts          tier entitlements and packaging
+  billing.ts             idempotent fee/commission ledger
+  quota.ts               metered AI features
+  curation.ts            submission queue, decisions and curated sales
+  curation-rules.ts      shared curation rules
+  research.ts            retrieval, identification, pricing and learning events
+  ai.ts                  Anthropic integration and deterministic fallback
+  seed.ts                first-run demo/reference data
 
-### Storage
-
-`store.ts` is a file-backed JSON store with write-then-rename persistence and a
-process-wide write queue, so two concurrent bids cannot interleave. It is deliberately
-the only file that touches the filesystem: **swapping it for Postgres, SQLite or Prisma
-means reimplementing `read()` and `mutate()` and nothing else.** Do that before you have
-real traffic — the current store keeps the whole database in memory and rewrites the
-whole file on every write, which is fine for a demo and wrong for a business.
-
-### The image gate
-
-Minted Up accepts high-end photography only, and enforces it by measurement rather than
-by asking politely:
-
-- **In the browser** (`_components/imageClient.ts`): a Laplacian variance over a
-  downscaled greyscale copy, normalised to 0-100, gives a focus score before the file is
-  uploaded.
-- **On the server** (`images.ts`): dimensions and format are read straight from the file
-  header — JPEG SOF markers, PNG IHDR, WebP VP8/VP8L/VP8X — with no image library and no
-  decode. Resolution, megapixels, file weight and *bytes per pixel* are checked against
-  published thresholds.
-
-Bytes per pixel is the interesting one: it catches an upscaled thumbnail or a photo that
-has been through a messaging app, both of which pass a naive resolution check while
-having already lost the detail a buyer zooms into.
-
-A rejected file is never written to disk, and the seller is shown exactly which rule it
-missed and by how much. Thresholds live in `IMAGE_RULES`; the tooltip text is generated
-from them so guidance cannot drift from enforcement.
-
-### Membership, and how money is made
-
-Minted Up does not take open registrations. The path in is:
-
-```
-apply  ->  a curator reads it  ->  a single-use code bound to that email
-       ->  register            ->  free member, 5 listings on the house
-       ->  upgrade             ->  shop member, £20/month
+src/app/mintedup/         pages and co-located components
+src/app/api/mintedup/     route handlers
 ```
 
-An invitation is one code, one email address, one use, valid thirty days. There is no
-route into the marketplace that skips it — `registerUser` refuses without a valid code.
+The domain layer is intentionally separate from React and route handlers. Marketplace rules belong in `src/mintedup`, while HTTP handlers authenticate/validate inputs and adapt domain results to responses.
+
+## Storage
+
+`store.ts` is a file-backed JSON store with copy-on-write mutation, a process-wide serialised write queue, and write-then-rename persistence. A failed mutation does not leak a half-mutated in-memory database into a later write.
+
+This is appropriate for development and a single-process prototype. It is **not** the production persistence model. Before real traffic, replace the store with a transactional database and preserve the `read()` / `mutate()` domain boundary or an equivalent repository abstraction. Local uploads must likewise move to durable object storage.
+
+## Image standard
+
+Minted Up deliberately refuses low-detail listing photography.
+
+- The browser measures focus using a Laplacian-variance style score on a downscaled greyscale image.
+- The server reads JPEG, PNG and WebP headers directly to verify dimensions and format.
+- Resolution, megapixels, file weight and bytes-per-pixel are checked against shared thresholds.
+- A rejected upload is not written to disk.
+- Seller guidance is generated from the same thresholds used for enforcement.
+
+Bytes-per-pixel is an additional heuristic for images that have nominally large dimensions but have already lost substantial detail through aggressive recompression or naive upscaling. It is a quality signal, not a substitute for visual inspection or provenance.
+
+## Membership and curation
+
+The intended path is:
+
+```text
+apply
+  -> curator review
+  -> single-use invitation bound to one email address
+  -> registration
+  -> free approved member
+  -> optional shop membership
+```
+
+Current product packaging:
 
 | | Free member | Shop member |
 | --- | --- | --- |
-| Cost | £0, by invitation | £20 a month |
-| Listings | 5 free, then 5p each | Unlimited, no listing fee |
-| Commission | 1% of sale value | 1% of sale value |
-| AI SEO / auto-complete | 10 / 3 per month | Unlimited |
+| Cost | £0, invitation required | £20/month |
+| Listings | 5 included, then 5p each | Unlimited, listing fee waived |
+| Commission | 1% of confirmed sale value | 1% of confirmed sale value |
+| AI SEO / auto-complete | Metered | Unlimited |
 | Boosted lots | — | 3 at a time |
 | Curation queue | Standard | Priority |
-| Extras | — | Verified badge, analytics, shopfront customisation, 21-day sales |
+| Extras | — | Verified badge, analytics, shop customisation, longer sales |
 
-Two rules keep this maintainable:
+`membership.ts` is the packaging authority. `billing.ts` is the fee-ledger authority.
 
-- **`membership.ts` is the only place packaging is decided.** Nothing branches on `tier`
-  directly; everything reads `entitlements()`. Changing what a shop gets is one file.
-- **`billing.ts` is the only place charging happens.** The listing fee falls due when a
-  curator approves a lot into the catalogue — not at submission — so a rejected lot is
-  never charged for. Commission is taken on settlement of a sale.
+A listing moves through the controlled lifecycle:
 
-**Nothing here moves money.** The ledger records what is owed so the arithmetic is right
-and auditable the day a payment processor is wired in. Subscribing does not take a card.
-This is the first job before launch.
+```text
+draft -> submitted -> active -> reserved -> sold
+              |          |          |
+              |          |          +-> cancelled payment: active or ended
+              |          +-> auction no-sale: ended
+              +-> changes / rejected
+```
 
-### Curation
+Once a listing enters curation or commerce, the seller cannot silently edit its factual content. It must return through the appropriate curation state before seller edits resume.
 
-`draft -> submitted -> approved -> active`, with `changes` and `rejected` as the two ways
-back. A curator works the queue at `/mintedup/admin/curation`, one lot at a time against
-a published checklist, and whatever they type in the notes field is shown to the seller
-verbatim. Shop members are curated first.
+## Trust Core: payment truthfulness
 
-Approving a buy-it-now lot catalogues it immediately. Approving an auction lot places it
-in a **curated sale** — a themed, scheduled event — and the lot takes that sale's closing
-time. The catalogue therefore reads like a saleroom calendar rather than an endless feed.
+Minted Up must never describe a button click as money received.
 
-### Sale mechanics
+`buyNow()` and auction settlement therefore create an order with `status: "awaiting_payment"` and move the lot to `reserved`. They **do not**:
 
-Buy-it-now is immediate. Auctions are proxy auctions: the bidder enters a maximum, the
-engine bids the minimum needed to keep them in front, and the maximum is never revealed.
-A proxy bid that authorises the reserve advances the price to the reserve, as it would in
-the room.
+- mark the order paid;
+- mark the lot sold;
+- post commission;
+- publish a realised market price to the research engine.
 
-**The closing countdown.** Every bid pushes the closing time out, and each successive
-extension is one second shorter than the last — 10s, 9s, 8s, down to a one-second floor.
-Sniping does not work, and because the increments shrink a contested lot still closes
-rather than running all night. The schedule is `extensionSeconds()` in `listings.ts`; the
-clock on the listing page ticks four times a second inside the closing two minutes and
-tells the bidder what the next bid will add.
+`src/mintedup/orders.ts` is the payment finalisation boundary. `confirmOrderPayment()` is the operation that can move an unpaid order to `paid`, mark the listing sold, post commission and publish the realised outcome to the research corpus.
 
-Auctions settle lazily — `settleDueAuctions()` runs on browse, listing and dashboard
-views. In production, move that to a scheduled job.
+The transition is designed to be retry-safe. Commission is deduplicated by order ID, listing fees are deduplicated by listing ID, and an already-recorded identical realised outcome is not re-weighted a second time.
 
-### AI features
+For development there is an admin-only bridge at:
 
-Both use the official Anthropic SDK against `claude-opus-5` with adaptive thinking and
-structured outputs (Zod schemas via `zodOutputFormat`).
+```text
+POST /api/mintedup/orders/[id]/payment
+```
 
-- **AI SEO button** — beside every text field in the composer. It rewrites one field from
-  the facts the seller has already entered. The system prompt forbids inventing a maker,
-  date, hallmark, provenance or material, and requires condition faults to stay in the
-  copy. The suggestion is shown with its reasoning; applying it is a separate click.
-- **Beta auto-complete** — reads up to 8 of the uploaded photographs and drafts the whole
-  listing. It fills only fields the seller has left empty, returns a confidence figure and
-  an explicit list of what it could not be sure about, and saves nothing on its own.
+It accepts `confirm` or `cancel`. In production the manual confirmation route is disabled unless `MINTEDUP_ALLOW_MANUAL_PAYMENT=1` is deliberately set. A real payment provider should call the domain payment-finalisation logic from a verified, idempotent webhook instead.
 
-Fields touched by AI are recorded in `seo.aiAssistedFields` and surfaced in admin, so
-AI-assisted copy is disclosable.
+This manual bridge is **not** a payment processor and must not be presented to customers as one.
 
-## Before this is a business
+## Auctions
 
-Ordered by how much trouble skipping it will cause:
+Minted Up uses proxy bidding. A bidder enters a maximum; the public bid advances only as far as necessary to remain ahead, subject to the increment rules and reserve.
 
-1. **Payments.** Nothing takes money: `buyNow` and `settleAuction` create an order with
-   status `paid`, and `billing.ts` only accrues to a ledger. Wire in a processor with
-   escrow or delayed capture for sales, and a subscription product for the £20/month
-   shop tier, including dunning when a card fails (`membership.status` already models
-   `lapsed`, and entitlements already fall back to free-tier limits when it is set).
-2. **A real database.** See Storage above.
-3. **Rate limiting and abuse controls** on auth, uploads, bidding and the AI endpoints.
-   The AI endpoints in particular cost money per call and are currently only gated by
-   "is signed in".
-4. **Email** — this is load-bearing here in a way it is not on an open marketplace:
-   invitation codes are currently only visible in the admin screen, so there is no way to
-   actually send someone their invitation. Also outbid notices, closing-soon notices,
-   curation decisions, and order confirmations.
-5. **Delete the demo accounts** in `seed.ts`.
-6. **Object storage** for uploads (S3 or similar) instead of the local data directory, and
-   a CDN in front of `/api/mintedup/images/[filename]`.
-7. **Scheduled auction settlement** rather than settling on page view.
-8. **Fraud and authenticity policy** — the category that most needs it is jewellery,
-   watches and militaria.
-9. **Curator capacity.** Curation is the product and the bottleneck: a queue that takes
-   three days makes the shop subscription hard to justify. Instrument the wait time
-   (already shown per lot in the desk) and staff against it.
+Auction lots belong to curated sales. A lot cannot receive bids before its sale opens.
+
+The current anti-sniping model extends the lot after each bid, starting at 10 seconds and shrinking by one second per extension to a one-second floor. The listing UI reflects the next extension amount. This behaviour should receive deterministic automated tests before production use.
+
+When an auction closes:
+
+- no qualifying bidder / reserve not met -> listing becomes `ended` and the no-sale outcome can be learned immediately;
+- winning bidder -> listing becomes `reserved`, an unpaid order is created, and realised-sale learning waits for payment confirmation.
+
+Auction settlement is still triggered lazily from reads such as browse/detail/dashboard. Move it to a scheduled or queue-backed worker before production.
+
+## Research gateway
+
+The research gateway is an explainable feedback system, not a free-form model memory.
+
+Its core mechanisms are:
+
+- BM25-style retrieval over tiered reference, market and community documents;
+- curated reference material weighted above community material;
+- naive-Bayes category suggestions with visible evidence terms;
+- empirical-Bayes price guidance that shrinks thin comparable samples toward a category prior;
+- append-only learning events so contributions can be audited and replayed.
+
+The four signal classes are intentionally weighted differently:
+
+1. searches: weak/noisy;
+2. explicit confirmations or rejections: stronger;
+3. attributes that survive into a curated listing: stronger again;
+4. genuine market outcomes: strongest.
+
+A **genuine market outcome now requires confirmed payment**. An unpaid reservation is never promoted to a realised-price market comparable.
+
+## AI features
+
+The listing composer supports:
+
+- per-field AI SEO suggestions based on facts already entered;
+- image-assisted beta auto-completion;
+- explicit confidence/uncertainty handling;
+- AI-assisted-field disclosure.
+
+The prompts prohibit inventing maker, date, hallmark, provenance or material and require condition faults to remain visible. Applying an AI suggestion is a separate user action.
+
+AI output remains advisory. Curation, seller responsibility and evidence quality are the trust boundary.
+
+## Production gate
+
+Minted Up is **not release-ready** yet. Before live commerce, complete at least:
+
+1. **Real payments** — processor integration, authenticated/idempotent webhooks, payment failure/expiry handling, refunds, chargebacks and subscription dunning.
+2. **Transactional database** — replace the JSON store before multi-instance or real-money operation.
+3. **Automated domain tests** — especially proxy-bid ties, reserve edge cases, concurrent bids, settlement retries, payment retries/cancellation and research outcome idempotency.
+4. **Rate limiting and abuse protection** — auth, applications, uploads, bidding, research and paid AI endpoints.
+5. **Email/notifications** — invitations, outbid messages, payment actions, curation decisions and order confirmations.
+6. **Object storage and delivery** — durable uploads, safe content serving and CDN strategy.
+7. **Background jobs** — auction settlement, unpaid-order expiry, notification delivery and maintenance tasks.
+8. **Demo-data isolation** — never seed production with demo credentials/accounts/orders.
+9. **Fraud, authenticity and dispute policy** — particularly jewellery, watches, militaria and high-value categories.
+10. **Legal/privacy/accessibility/security review** appropriate to a UK marketplace handling accounts, payments and user-generated listings.
+
+A change is not considered proven because GitHub reports the branch as mergeable. The release gate is: locked dependency install, lint, typecheck, automated tests when present, production build, critical workflow validation and review of security/payment failure paths.
 
 ## Promoting Minted Up to its own site
 
-It is a route group away. Move `src/app/mintedup/*` to `src/app/(mintedup)/*`, make its
-layout the root, and point the domain at it. Nothing in `src/mintedup/` or the API routes
-assumes the `/mintedup` prefix except the links in the pages themselves.
+The product is already separated cleanly enough to move to its own root/domain later. Keep `src/mintedup/` as the domain layer and move the app routes/chrome when the deployment boundary is ready rather than rewriting the marketplace logic.
