@@ -19,6 +19,17 @@ type Cache = { db: Database | null; queue: Promise<unknown> };
 const globalCache = globalThis as typeof globalThis & { __mintedUpStore?: Cache };
 const cache: Cache = (globalCache.__mintedUpStore ??= { db: null, queue: Promise.resolve() });
 
+type DerivedResearchCaches = typeof globalThis & {
+  __mintedUpIndex?: unknown;
+  __mintedUpResearchV2Index?: unknown;
+};
+
+function invalidateDerivedCaches(): void {
+  const derived = globalThis as DerivedResearchCaches;
+  derived.__mintedUpIndex = undefined;
+  derived.__mintedUpResearchV2Index = undefined;
+}
+
 export function newId(prefix: string): string {
   return `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
@@ -53,6 +64,11 @@ export async function mutate<T>(fn: (db: Database) => T | Promise<T>): Promise<T
     const result = await fn(draft);
     await persist(draft);
     cache.db = draft;
+    // Research indexes are derived state. Any successful database mutation can
+    // change source metadata, terms, feedback or prices without changing row
+    // count, so invalidate rather than trying to guess whether a signature is
+    // still safe. Production DB search/indexing will replace this prototype.
+    invalidateDerivedCaches();
     return result;
   });
   cache.queue = run.catch(() => undefined);
