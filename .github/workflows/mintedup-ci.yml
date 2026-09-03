@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: mintedup-ci-${{ github.ref }}
@@ -21,14 +21,29 @@ jobs:
       CI: "true"
       MINTEDUP_DATA_DIR: /tmp/mintedup-ci
     steps:
-      - name: Checkout
+      - name: Checkout branch for one-off lockfile generation
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Use Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
+      - name: Generate Neon dependency lockfile once
+        run: |
+          npm install @neondatabase/serverless@1.1.0 --save-exact --package-lock-only
+          if git diff --quiet -- package.json package-lock.json; then
+            echo "Lockfile already current"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package.json package-lock.json
+            git commit -m "Install Neon serverless driver"
+            git push origin HEAD:claude/minted-up-marketplace-13sn7o
+          fi
 
       - name: Install locked dependencies
         run: npm ci
