@@ -1,0 +1,98 @@
+name: Nexu Performance AI Android v0.1.0 RC
+
+on:
+  push:
+    branches:
+      - build/nexu-performance-ai-android-v0.1.0
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-release-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PROJECT_DIR: android-build/Nexu-Performance-AI-Android-v0.1.0/project
+    steps:
+      - name: Checkout isolated build branch
+        uses: actions/checkout@v4
+
+      - name: Reconstruct source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROJECT_DIR"
+          cat android-build/Nexu-Performance-AI-Android-v0.1.0/source.b64.part* | base64 --decode > /tmp/nexu-source.tar.gz
+          echo "66b46cb5069960e4bf8da4b9e760bd7f70e602bb69eb2eb20f267a6c3c065c06  /tmp/nexu-source.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/nexu-source.tar.gz -C "$PROJECT_DIR"
+
+      - name: Set up Microsoft OpenJDK 21.0.12
+        uses: actions/setup-java@v4
+        with:
+          distribution: microsoft
+          java-version: '21.0.12'
+
+      - name: Set up Gradle 9.5.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Install Android API 36 and Build Tools 36.0.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
+          mkdir -p "$PROJECT_DIR/ci-evidence"
+          java -version 2> "$PROJECT_DIR/ci-evidence/java-version.txt"
+          gradle --version > "$PROJECT_DIR/ci-evidence/gradle-version.txt"
+          sdkmanager --list_installed > "$PROJECT_DIR/ci-evidence/android-sdk-packages.txt"
+
+      - name: Validate reconstructed source
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: python3 tools/verify_source.py | tee ci-evidence/source-verification.txt
+
+      - name: Run platform-neutral unit tests
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle --no-daemon --stacktrace :core:test | tee ci-evidence/unit-tests.txt
+
+      - name: Run Android lint release gate
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle --no-daemon --stacktrace :app:lintRelease | tee ci-evidence/android-lint.txt
+
+      - name: Build release APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle --no-daemon --stacktrace :app:assembleRelease | tee ci-evidence/android-build.txt
+
+      - name: Zipalign and inspect unsigned release APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+          mkdir -p rc-artifacts
+          UNSIGNED="app/build/outputs/apk/release/app-release-unsigned.apk"
+          test -f "$UNSIGNED"
+          "$BT/zipalign" -f -p 4 "$UNSIGNED" rc-artifacts/Nexu-Performance-AI-Android-v0.1.0-aligned-unsigned.apk
+          "$BT/zipalign" -c -v 4 rc-artifacts/Nexu-Performance-AI-Android-v0.1.0-aligned-unsigned.apk > ci-evidence/zipalign-verification.txt
+          "$BT/aapt" dump badging rc-artifacts/Nexu-Performance-AI-Android-v0.1.0-aligned-unsigned.apk > ci-evidence/apk-metadata.txt
+          sha256sum rc-artifacts/Nexu-Performance-AI-Android-v0.1.0-aligned-unsigned.apk > ci-evidence/unsigned-apk.sha256
+          tar -czf rc-artifacts/android-build-tools-36.0.0-linux.tar.gz -C "$ANDROID_HOME/build-tools" 36.0.0
+          cp -f app/build/reports/lint-results-release.html ci-evidence/ 2>/dev/null || true
+          cp -f app/build/reports/lint-results-release.xml ci-evidence/ 2>/dev/null || true
+          cp -f app/build/reports/lint-results-release.txt ci-evidence/ 2>/dev/null || true
+
+      - name: Upload unsigned evidence package
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexu-performance-ai-android-v0.1.0-unsigned
+          path: |
+            ${{ env.PROJECT_DIR }}/rc-artifacts
+            ${{ env.PROJECT_DIR }}/ci-evidence
+          if-no-files-found: error
+          retention-days: 7
