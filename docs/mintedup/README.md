@@ -157,7 +157,7 @@ Minted Up must never describe a button click as money received.
 
 `src/mintedup/orders.ts` is the payment finalisation boundary. `confirmOrderPayment()` is the operation that can move an unpaid order to `paid`, mark the listing sold, post commission and publish the realised outcome to the research corpus.
 
-The transition is designed to be retry-safe. Commission is deduplicated by order ID, listing fees are deduplicated by listing ID, and an already-recorded identical realised outcome is not re-weighted a second time.
+The current single-process prototype serialises the full payment-finalisation path. Commission is deduplicated by order ID, listing fees are deduplicated by listing ID, and an already-recorded identical realised outcome is not deliberately re-weighted on a retry. A production multi-instance deployment still requires a transactional database and payment-provider idempotency/event keys.
 
 For development there is an admin-only bridge at:
 
