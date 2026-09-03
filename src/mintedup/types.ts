@@ -69,7 +69,8 @@ export type ListingFormat = "buy" | "bid";
 /**
  * Minted Up runs curated sales: nothing reaches the catalogue without a curator
  * passing it. `draft` -> `submitted` -> `approved` -> `active`, with `changes`
- * and `rejected` as the two ways back.
+ * and `rejected` as the two ways back. `reserved` means a buyer/winning bidder
+ * has an order but payment has not yet been confirmed.
  */
 export type ListingStatus =
   | "draft"
@@ -78,6 +79,7 @@ export type ListingStatus =
   | "rejected"
   | "approved"
   | "active"
+  | "reserved"
   | "sold"
   | "ended"
   | "removed";
@@ -150,6 +152,19 @@ export type Bid = {
   retracted: boolean;
 };
 
+/**
+ * Commerce state is deliberately truthful: creating an order never means money
+ * moved. Only a payment-provider callback (or the explicitly gated local/manual
+ * development path) may transition `awaiting_payment` to `paid`.
+ */
+export type OrderStatus =
+  | "awaiting_payment"
+  | "paid"
+  | "shipped"
+  | "delivered"
+  | "cancelled"
+  | "refunded";
+
 export type Order = {
   id: string;
   listingId: string;
@@ -158,7 +173,11 @@ export type Order = {
   amount: number;
   format: ListingFormat;
   placedAt: string;
-  status: "paid" | "shipped" | "delivered" | "refunded";
+  status: OrderStatus;
+  /** Processor transaction/reference. Null until payment is confirmed. */
+  paymentReference: string | null;
+  paymentConfirmedAt: string | null;
+  cancelledAt: string | null;
 };
 
 export type ListingAttributes = {
