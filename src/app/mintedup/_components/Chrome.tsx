@@ -41,6 +41,14 @@ export async function MuHeader() {
         <div className="mu-sans flex items-center gap-2">
           {user ? (
             <>
+              {user.role !== "user" ? (
+                <Link
+                  className="hidden rounded-lg px-3 py-2 text-sm font-medium text-[var(--mu-brass)] lg:inline-block"
+                  href="/mintedup/admin/sources"
+                >
+                  Sources
+                </Link>
+              ) : null}
               {user.role === "admin" ? (
                 <Link
                   className="hidden rounded-lg px-3 py-2 text-sm font-medium text-[var(--mu-verdigris)] sm:inline-block"
