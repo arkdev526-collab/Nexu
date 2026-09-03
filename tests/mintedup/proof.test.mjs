@@ -24,7 +24,7 @@ const {
   PAYMENT_WINDOW_MS,
 } = await import("../../src/mintedup/orders.ts");
 
-async function reset(): Promise<void> {
+async function reset() {
   await mutate((db) => {
     db.users = [];
     db.listings = [];
@@ -41,10 +41,15 @@ async function reset(): Promise<void> {
   });
 }
 
-async function activeListing(format: "buy" | "bid", reserve = 0) {
+function must(value, label) {
+  assert.ok(value, label);
+  return value;
+}
+
+async function activeListing(format, reserve = 0) {
   const draft = await createDraft("seller", "ceramics");
   await mutate((db) => {
-    const listing = db.listings.find((candidate) => candidate.id === draft.id)!;
+    const listing = must(db.listings.find((candidate) => candidate.id === draft.id), "listing fixture");
     listing.status = "active";
     listing.format = format;
     listing.title = "Proof layer antique test lot";
@@ -65,7 +70,10 @@ test("proxy ties preserve the earlier bidder and do not reveal more than the tie
   const tied = await placeBid({ listingId, bidderId: "second", maxAmount: 10_000 });
   assert.equal(tied.leading, false);
   assert.equal(tied.visibleAmount, 10_000);
-  const standing = await read((db) => currentBid(db.listings.find((l) => l.id === listingId)!, db.bids));
+  const standing = await read((db) => currentBid(
+    must(db.listings.find((listing) => listing.id === listingId), "auction listing"),
+    db.bids,
+  ));
   assert.equal(standing.bidderId, "first");
 });
 
@@ -87,11 +95,11 @@ test("an auction with no qualifying winner records one no-sale outcome", async (
   await reset();
   const listingId = await activeListing("bid", 5_000);
   await mutate((db) => {
-    db.listings.find((listing) => listing.id === listingId)!.endsAt = new Date(Date.now() - 1_000).toISOString();
+    must(db.listings.find((listing) => listing.id === listingId), "auction listing").endsAt = new Date(Date.now() - 1_000).toISOString();
   });
   assert.equal(await settleAuction(listingId), null);
   const state = await read((db) => ({
-    status: db.listings.find((listing) => listing.id === listingId)!.status,
+    status: must(db.listings.find((listing) => listing.id === listingId), "auction listing").status,
     noSales: db.learningEvents.filter((event) => event.kind === "no_sale_outcome").length,
   }));
   assert.equal(state.status, "ended");
@@ -104,20 +112,20 @@ test("payment confirmation is idempotent and conflicting references are rejected
   const order = await buyNow({ listingId, buyerId: "buyer" });
   assert.equal(order.paymentStatus, "awaiting_payment");
   assert.ok(order.paymentExpiresAt);
-  assert.ok(Date.parse(order.paymentExpiresAt!) - Date.parse(order.placedAt) <= PAYMENT_WINDOW_MS.buy + 1_000);
+  assert.ok(Date.parse(order.paymentExpiresAt) - Date.parse(order.placedAt) <= PAYMENT_WINDOW_MS.buy + 1_000);
 
   await confirmOrderPayment({ orderId: order.id, paymentReference: "pay-proof-1" });
   await confirmOrderPayment({ orderId: order.id, paymentReference: "pay-proof-1" });
   await assert.rejects(
     confirmOrderPayment({ orderId: order.id, paymentReference: "pay-different" }),
-    (error: unknown) => (error as { status?: number }).status === 409,
+    (error) => error?.status === 409,
   );
 
   const state = await read((db) => ({
     commissions: db.ledger.filter((entry) => entry.kind === "commission" && entry.orderId === order.id).length,
     marketDocs: db.researchDocs.filter((doc) => doc.sourceListingId === listingId && doc.tier === "market").length,
     saleEvents: db.learningEvents.filter((event) => event.kind === "sale_outcome").length,
-    listing: db.listings.find((candidate) => candidate.id === listingId)!,
+    listing: must(db.listings.find((candidate) => candidate.id === listingId), "buy listing"),
   }));
   assert.equal(state.commissions, 1);
   assert.equal(state.marketDocs, 1);
@@ -133,11 +141,11 @@ test("manual cancellation releases fixed-price stock and cannot later be confirm
   await cancelAwaitingPayment(order.id);
   await assert.rejects(
     confirmOrderPayment({ orderId: order.id, paymentReference: "pay-after-cancel" }),
-    (error: unknown) => (error as { status?: number }).status === 409,
+    (error) => error?.status === 409,
   );
   const state = await read((db) => ({
-    order: db.orders.find((candidate) => candidate.id === order.id)!,
-    listing: db.listings.find((candidate) => candidate.id === listingId)!,
+    order: must(db.orders.find((candidate) => candidate.id === order.id), "cancelled order"),
+    listing: must(db.listings.find((candidate) => candidate.id === listingId), "buy listing"),
   }));
   assert.equal(state.order.paymentStatus, "cancelled");
   assert.equal(state.listing.status, "active");
@@ -149,25 +157,24 @@ test("expired reservations release Buy It stock but close an auction winner with
   const buyListingId = await activeListing("buy");
   const buyOrder = await buyNow({ listingId: buyListingId, buyerId: "buyer" });
   await mutate((db) => {
-    db.orders.find((order) => order.id === buyOrder.id)!.paymentExpiresAt = new Date(Date.now() - 1_000).toISOString();
+    must(db.orders.find((order) => order.id === buyOrder.id), "buy order").paymentExpiresAt = new Date(Date.now() - 1_000).toISOString();
   });
   assert.deepEqual(await expireAwaitingPayments(), [buyOrder.id]);
 
   const auctionListingId = await activeListing("bid");
   await placeBid({ listingId: auctionListingId, bidderId: "winner", maxAmount: 4_000 });
   await mutate((db) => {
-    db.listings.find((listing) => listing.id === auctionListingId)!.endsAt = new Date(Date.now() - 1_000).toISOString();
+    must(db.listings.find((listing) => listing.id === auctionListingId), "auction listing").endsAt = new Date(Date.now() - 1_000).toISOString();
   });
-  const auctionOrder = await settleAuction(auctionListingId);
-  assert.ok(auctionOrder);
+  const auctionOrder = must(await settleAuction(auctionListingId), "auction order");
   await mutate((db) => {
-    db.orders.find((order) => order.id === auctionOrder!.id)!.paymentExpiresAt = new Date(Date.now() - 1_000).toISOString();
+    must(db.orders.find((order) => order.id === auctionOrder.id), "auction order").paymentExpiresAt = new Date(Date.now() - 1_000).toISOString();
   });
-  assert.deepEqual(await expireAwaitingPayments(), [auctionOrder!.id]);
+  assert.deepEqual(await expireAwaitingPayments(), [auctionOrder.id]);
 
   const state = await read((db) => ({
-    buy: db.listings.find((listing) => listing.id === buyListingId)!,
-    auction: db.listings.find((listing) => listing.id === auctionListingId)!,
+    buy: must(db.listings.find((listing) => listing.id === buyListingId), "buy listing"),
+    auction: must(db.listings.find((listing) => listing.id === auctionListingId), "auction listing"),
     commissions: db.ledger.filter((entry) => entry.kind === "commission").length,
     saleEvents: db.learningEvents.filter((event) => event.kind === "sale_outcome").length,
   }));
