@@ -17,10 +17,15 @@ function assertCronSecret(request: Request): void {
 
 export async function GET(request: Request) {
   try {
-    assertCronSecret(request);
+    // Disabled, duplicate-project and non-durable deployments must be silent.
+    // This lets vercel.json register the schedule now without creating error
+    // noise before the durable store and primary project are deliberately set.
     const gate = scheduledIngestionGate();
     if (!gate.enabled) return ok({ skipped: true, reason: gate.reason });
 
+    // Authentication becomes mandatory only once this deployment is actually
+    // permitted to mutate shared production state.
+    assertCronSecret(request);
     await ensureSeeded();
     await ensureVerifiedSourceSeeds();
     const profile = nextScheduledMetProfile();
