@@ -40,7 +40,40 @@ export type Listing = {
 export type SignalType = "mark" | "maker" | "material" | "form" | "motif" | "period" | "origin" | "condition" | "dimension" | "keyword";
 export type ResearchSignal = { id: string; type: SignalType; value: string; source: "user" | "ai" | "confirmed" | "rejected"; confidence: number; notedAt: string };
 export type ResearchSession = { id: string; userId: string; title: string; categoryId: string | null; notes: string; signals: ResearchSignal[]; queries: string[]; listingId: string | null; createdAt: string; updatedAt: string };
-export type ResearchDoc = { id: string; tier: "reference" | "market" | "community"; title: string; body: string; categoryId: string; terms: string[]; realisedPrice: number | null; currency: "GBP" | "USD" | "EUR" | null; sourceListingId: string | null; contributedBy: string | null; weight: number; createdAt: string };
+
+/** Evidence provenance is optional so old file-backed rows remain readable. */
+export type ResearchSourceType =
+  | "museum"
+  | "institution"
+  | "auction-house"
+  | "dealer"
+  | "marketplace"
+  | "seller"
+  | "mintedup-reference"
+  | "mintedup-demo";
+export type ResearchPriceBasis = "realised" | "asking" | null;
+export type ResearchDoc = {
+  id: string;
+  tier: "reference" | "market" | "community";
+  title: string;
+  body: string;
+  categoryId: string;
+  terms: string[];
+  realisedPrice: number | null;
+  currency: "GBP" | "USD" | "EUR" | null;
+  sourceListingId: string | null;
+  contributedBy: string | null;
+  weight: number;
+  createdAt: string;
+  sourceType?: ResearchSourceType;
+  sourceName?: string | null;
+  sourceUrl?: string | null;
+  sourceRecord?: string | null;
+  sourceVerified?: boolean;
+  observedAt?: string | null;
+  priceBasis?: ResearchPriceBasis;
+  askingPrice?: number | null;
+};
 export type LearningEvent = { id: string; sessionId: string | null; userId: string | null; kind: "query" | "suggestion_shown" | "suggestion_accepted" | "suggestion_rejected" | "signal_added" | "listing_published" | "sale_outcome" | "no_sale_outcome"; terms: string[]; categoryId: string | null; docId: string | null; value: number | null; weight: number; createdAt: string };
 export type Application = { id: string; email: string; name: string; dealing: string; links: string; status: "pending" | "approved" | "rejected"; notes: string; decidedBy: string | null; decidedAt: string | null; createdAt: string };
 export type Invite = { code: string; email: string; applicationId: string | null; createdBy: string; createdAt: string; expiresAt: string; usedAt: string | null; usedBy: string | null };

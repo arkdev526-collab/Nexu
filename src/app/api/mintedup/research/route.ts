@@ -1,31 +1,37 @@
 import { currentUser } from "@/mintedup/auth";
 import { fail, ok, str } from "@/mintedup/http";
-import { recordEvent, research, tokenize } from "@/mintedup/research";
+import { recordEvent, tokenize } from "@/mintedup/research";
+import { researchV2 } from "@/mintedup/research-v2";
 import { ensureSeeded } from "@/mintedup/seed";
+import { assertSameOrigin, enforceRateLimit } from "@/mintedup/security";
 import { mutate, read } from "@/mintedup/store";
 
-/**
- * Ask the research gateway a question.
- *
- * Every query is logged as a learning event before the answer comes back —
- * loop 1 of the four described in research.ts. The signals already gathered in
- * this session are folded into the query, so the gateway's answers sharpen as
- * the seller tells it more about the object.
- */
+/** Research v2 query boundary. Searches may be anonymous, but every mutation is
+ * same-origin and throttled. The model never teaches itself its own prediction. */
 export async function POST(request: Request) {
   try {
+    assertSameOrigin(request);
     await ensureSeeded();
     const user = await currentUser();
+    enforceRateLimit(request, "research", { limit: 60, windowMs: 60_000 }, user?.id ?? "anonymous");
+
     const body = await request.json();
     const query = str(body.query).slice(0, 500);
     const sessionId = body.sessionId ? str(body.sessionId) : null;
     const categoryId = body.categoryId ? str(body.categoryId) : null;
+    const currency = ["GBP", "USD", "EUR"].includes(str(body.currency))
+      ? (str(body.currency) as "GBP" | "USD" | "EUR")
+      : "GBP";
 
     const signals = sessionId
-      ? await read((db) => db.researchSessions.find((s) => s.id === sessionId)?.signals ?? [])
+      ? await read((db) => {
+          const session = db.researchSessions.find((candidate) => candidate.id === sessionId);
+          if (!session || (user && session.userId !== user.id)) return [];
+          return session.signals;
+        })
       : [];
 
-    const result = await research({ query, categoryId, signals });
+    const result = await researchV2({ query, categoryId, signals, currency });
 
     if (query.trim()) {
       await recordEvent({
@@ -33,12 +39,13 @@ export async function POST(request: Request) {
         terms: tokenize(query),
         sessionId,
         userId: user?.id ?? null,
-        // The top suggestion is the category this query is evidence *for*.
-        categoryId: categoryId ?? result.categories[0]?.categoryId ?? null,
+        // Crucial v2 rule: a model prediction is never written back as truth.
+        // Only an explicitly selected category is allowed to teach identity.
+        categoryId,
       });
-      if (sessionId) {
+      if (sessionId && user) {
         await mutate((db) => {
-          const session = db.researchSessions.find((s) => s.id === sessionId);
+          const session = db.researchSessions.find((candidate) => candidate.id === sessionId && candidate.userId === user.id);
           if (!session) return;
           session.queries = [...session.queries, query].slice(-50);
           session.updatedAt = new Date().toISOString();

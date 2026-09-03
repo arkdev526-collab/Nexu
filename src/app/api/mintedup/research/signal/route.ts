@@ -1,6 +1,7 @@
 import { requireUser } from "@/mintedup/auth";
 import { fail, num, ok, str } from "@/mintedup/http";
 import { recordEvent, tokenize } from "@/mintedup/research";
+import { assertSameOrigin, enforceRateLimit, SecurityError } from "@/mintedup/security";
 import { mutate, newId } from "@/mintedup/store";
 import type { ResearchSession, ResearchSignal, SignalType } from "@/mintedup/types";
 
@@ -9,20 +10,18 @@ const TYPES: SignalType[] = [
   "dimension", "keyword",
 ];
 
-/**
- * Record one observation about the object being researched — loop 2.
- *
- * A signal marked `confirmed` (the seller pressed "yes, that's it" on a
- * suggestion) carries several times the weight of one the AI merely proposed.
- */
+/** Record one owned observation about the object being researched. */
 export async function POST(request: Request) {
   try {
+    assertSameOrigin(request);
     const user = await requireUser();
+    enforceRateLimit(request, "research-signal", { limit: 30, windowMs: 60_000 }, user.id);
     const body = await request.json();
     const type = TYPES.includes(str(body.type) as SignalType)
       ? (str(body.type) as SignalType)
       : "keyword";
     const value = str(body.value).trim().slice(0, 200);
+    if (!value) throw new SecurityError("Record an observation before saving it.", 400);
     const source = ["user", "ai", "confirmed", "rejected"].includes(str(body.source))
       ? (str(body.source) as ResearchSignal["source"])
       : "user";
@@ -37,9 +36,12 @@ export async function POST(request: Request) {
     };
 
     const sessionId = await mutate((db) => {
-      let session = body.sessionId
-        ? db.researchSessions.find((s) => s.id === str(body.sessionId))
-        : undefined;
+      let session: ResearchSession | undefined;
+      if (body.sessionId) {
+        session = db.researchSessions.find((candidate) => candidate.id === str(body.sessionId));
+        if (!session) throw new SecurityError("Research session not found.", 404);
+        if (session.userId !== user.id) throw new SecurityError("That research session is not yours.", 403);
+      }
 
       if (!session) {
         session = {
@@ -57,11 +59,10 @@ export async function POST(request: Request) {
         db.researchSessions.push(session);
       }
 
-      if (value) {
-        // Re-answering an attribute replaces the earlier answer rather than
-        // stacking contradictory observations.
-        session.signals = [...session.signals.filter((s) => !(s.type === type && s.value.toLowerCase() === value.toLowerCase())), signal];
-      }
+      session.signals = [
+        ...session.signals.filter((existing) => existing.type !== type),
+        signal,
+      ];
       if (body.notes !== undefined) session.notes = str(body.notes).slice(0, 4000);
       if (body.categoryId) session.categoryId = str(body.categoryId);
       if (body.title) session.title = str(body.title).slice(0, 160);
@@ -69,16 +70,14 @@ export async function POST(request: Request) {
       return session.id;
     });
 
-    if (value) {
-      await recordEvent({
-        kind: source === "rejected" ? "suggestion_rejected" : source === "confirmed" ? "suggestion_accepted" : "signal_added",
-        terms: [`${type}:${value}`, ...tokenize(value)],
-        sessionId,
-        userId: user.id,
-        categoryId: body.categoryId ? str(body.categoryId) : null,
-        docId: body.docId ? str(body.docId) : null,
-      });
-    }
+    await recordEvent({
+      kind: source === "rejected" ? "suggestion_rejected" : source === "confirmed" ? "suggestion_accepted" : "signal_added",
+      terms: [`${type}:${value}`, ...tokenize(value)],
+      sessionId,
+      userId: user.id,
+      categoryId: body.categoryId ? str(body.categoryId) : null,
+      docId: body.docId ? str(body.docId) : null,
+    });
 
     return ok({ sessionId, signal }, 201);
   } catch (error) {
