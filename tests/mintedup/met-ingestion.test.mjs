@@ -139,7 +139,13 @@ test("dry-run reports new evidence without mutating the Source Library and cron 
   assert.equal(await read((db) => db.sourceRecords.length), 0);
   assert.equal(scheduledIngestionGate({}).enabled, false);
   assert.equal(scheduledIngestionGate({ MINTEDUP_ENABLE_SCHEDULED_INGESTION: "1", MINTEDUP_CRON_PRIMARY: "1" }).enabled, false);
-  assert.equal(scheduledIngestionGate({ MINTEDUP_ENABLE_SCHEDULED_INGESTION: "1", MINTEDUP_CRON_PRIMARY: "1", MINTEDUP_DURABLE_STORE: "1" }).enabled, true);
+  assert.equal(scheduledIngestionGate({ MINTEDUP_ENABLE_SCHEDULED_INGESTION: "1", MINTEDUP_CRON_PRIMARY: "1", MINTEDUP_DURABLE_STORE: "1" }).enabled, false);
+  assert.equal(scheduledIngestionGate({
+    MINTEDUP_ENABLE_SCHEDULED_INGESTION: "1",
+    MINTEDUP_CRON_PRIMARY: "1",
+    MINTEDUP_STORE_BACKEND: "postgres",
+    MINTEDUP_DATABASE_URL: "postgresql://user:secret@example.neon.tech/mintedup",
+  }).enabled, true);
 });
 
 test.after(async () => {
