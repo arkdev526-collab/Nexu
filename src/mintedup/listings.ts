@@ -1,4 +1,3 @@
-import { chargeCommission } from "./billing";
 import { formatMoney } from "./format";
 import { recordOutcome } from "./research";
 import { mutate, newId, read } from "./store";
@@ -8,6 +7,10 @@ import type { Bid, Listing, Order } from "./types";
  * Sale mechanics: buy-it-now, and a proxy auction of the kind collectors
  * expect — you enter your maximum, the engine bids the minimum needed to keep
  * you in front, and your maximum is never revealed.
+ *
+ * IMPORTANT: creating an order reserves a lot; it does not claim payment has
+ * happened. Payment confirmation lives in `orders.ts` so commission and market
+ * learning only happen after a real, explicit payment transition.
  */
 
 export class ListingError extends Error {
@@ -169,8 +172,12 @@ export async function placeBid(input: {
   });
 }
 
+/**
+ * Reserve a fixed-price lot and create an unpaid order. No commission, sale
+ * outcome or `sold` state is produced here because no money moved here.
+ */
 export async function buyNow(input: { listingId: string; buyerId: string }): Promise<Order> {
-  const { order, listing } = await mutate((db) => {
+  return mutate((db) => {
     const listing = db.listings.find((l) => l.id === input.listingId);
     if (!listing) throw new ListingError("Listing not found.", 404);
     if (listing.format !== "buy") throw new ListingError("This lot is sold by auction.");
@@ -179,6 +186,7 @@ export async function buyNow(input: { listingId: string; buyerId: string }): Pro
       throw new ListingError("You cannot buy your own listing.");
     }
 
+    const now = new Date().toISOString();
     const order: Order = {
       id: newId("ord"),
       listingId: listing.id,
@@ -186,29 +194,24 @@ export async function buyNow(input: { listingId: string; buyerId: string }): Pro
       sellerId: listing.sellerId,
       amount: listing.price,
       format: "buy",
-      placedAt: new Date().toISOString(),
-      status: "paid",
+      placedAt: now,
+      status: "awaiting_payment",
+      paymentReference: null,
+      paymentConfirmedAt: null,
+      cancelledAt: null,
     };
     db.orders.push(order);
-    listing.status = "sold";
-    listing.soldAt = order.placedAt;
-    listing.soldPrice = order.amount;
-    listing.updatedAt = order.placedAt;
-    return { order, listing: structuredClone(listing) };
+    listing.status = "reserved";
+    listing.updatedAt = now;
+    return structuredClone(order);
   });
-
-  await chargeCommission({
-    sellerId: order.sellerId,
-    orderId: order.id,
-    listingId: order.listingId,
-    amount: order.amount,
-  });
-  // Loop 4: tell the research engine what the market paid.
-  await recordOutcome(listing, { sold: true, price: order.amount });
-  return order;
 }
 
-/** Close an auction that has run out of time, honouring the reserve. */
+/**
+ * Close an auction that has run out of time, honouring the reserve. A winning
+ * lot becomes `reserved` with an `awaiting_payment` order. An unsold lot can be
+ * learned immediately because that no-sale outcome is already final.
+ */
 export async function settleAuction(listingId: string): Promise<Order | null> {
   const outcome = await mutate((db) => {
     const listing = db.listings.find((l) => l.id === listingId);
@@ -222,7 +225,7 @@ export async function settleAuction(listingId: string): Promise<Order | null> {
     if (!top || top.amount < listing.reserve) {
       listing.status = "ended";
       listing.updatedAt = now;
-      return { order: null, listing: structuredClone(listing) };
+      return { order: null, listing: structuredClone(listing), noSale: true };
     }
 
     const order: Order = {
@@ -233,29 +236,21 @@ export async function settleAuction(listingId: string): Promise<Order | null> {
       amount: top.amount,
       format: "bid",
       placedAt: now,
-      status: "paid",
+      status: "awaiting_payment",
+      paymentReference: null,
+      paymentConfirmedAt: null,
+      cancelledAt: null,
     };
     db.orders.push(order);
-    listing.status = "sold";
-    listing.soldAt = now;
-    listing.soldPrice = top.amount;
+    listing.status = "reserved";
     listing.updatedAt = now;
-    return { order, listing: structuredClone(listing) };
+    return { order: structuredClone(order), listing: structuredClone(listing), noSale: false };
   });
 
   if (!outcome) return null;
-  if (outcome.order) {
-    await chargeCommission({
-      sellerId: outcome.order.sellerId,
-      orderId: outcome.order.id,
-      listingId: outcome.order.listingId,
-      amount: outcome.order.amount,
-    });
+  if (outcome.noSale) {
+    await recordOutcome(outcome.listing, { sold: false, price: null });
   }
-  await recordOutcome(outcome.listing, {
-    sold: Boolean(outcome.order),
-    price: outcome.order?.amount ?? null,
-  });
   return outcome.order;
 }
 
@@ -350,7 +345,9 @@ export async function createDraft(sellerId: string, categoryId: string): Promise
 /**
  * Apply a partial update from the composer. Only the fields a seller owns are
  * writable — status, views, sale results and the image list are not, so a
- * crafted request cannot publish a listing or mark it sold.
+ * crafted request cannot publish a listing or mark it sold. Once a lot has
+ * entered curation/live commerce it is immutable to the seller; changes must
+ * come back through the curation workflow first.
  */
 export async function updateListing(
   listingId: string,
@@ -368,7 +365,9 @@ export async function updateListing(
     const listing = db.listings.find((l) => l.id === listingId);
     if (!listing) throw new ListingError("Listing not found.", 404);
     if (listing.sellerId !== sellerId) throw new ListingError("That is not your listing.", 403);
-    if (listing.status === "sold") throw new ListingError("A sold listing cannot be edited.", 409);
+    if (!["draft", "changes", "rejected"].includes(listing.status)) {
+      throw new ListingError("This lot is locked while it is in curation or commerce.", 409);
+    }
 
     Object.assign(listing, patch, {
       attributes: { ...listing.attributes, ...(patch.attributes ?? {}) },
