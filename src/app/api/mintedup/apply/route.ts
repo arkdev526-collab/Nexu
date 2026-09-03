@@ -1,14 +1,18 @@
 import { applyForMembership, inspectInvite } from "@/mintedup/auth";
 import { fail, ok, str } from "@/mintedup/http";
 import { ensureSeeded } from "@/mintedup/seed";
+import { assertSameOrigin, enforceRateLimit } from "@/mintedup/security";
 
-/** Apply for membership. Minted Up does not take open registrations. */
 export async function POST(request: Request) {
   try {
+    assertSameOrigin(request);
     await ensureSeeded();
     const body = await request.json();
+    const email = str(body.email).trim().toLowerCase();
+    enforceRateLimit(request, "application", { limit: 4, windowMs: 60 * 60_000 }, email);
+
     const application = await applyForMembership({
-      email: str(body.email),
+      email,
       name: str(body.name),
       dealing: str(body.dealing),
       links: str(body.links),
@@ -19,10 +23,10 @@ export async function POST(request: Request) {
   }
 }
 
-/** Check an invitation code before the registration form is filled in. */
 export async function GET(request: Request) {
   try {
     await ensureSeeded();
+    enforceRateLimit(request, "invite-inspect", { limit: 30, windowMs: 10 * 60_000 });
     const code = new URL(request.url).searchParams.get("code") ?? "";
     return ok(await inspectInvite(code));
   } catch (error) {

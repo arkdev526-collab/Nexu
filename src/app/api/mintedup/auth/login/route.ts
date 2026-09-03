@@ -1,15 +1,18 @@
 import { AuthError, createSession, verifyPassword } from "@/mintedup/auth";
 import { fail, ok, str } from "@/mintedup/http";
 import { ensureSeeded } from "@/mintedup/seed";
+import { assertSameOrigin, enforceRateLimit } from "@/mintedup/security";
 import { read } from "@/mintedup/store";
 
 export async function POST(request: Request) {
   try {
+    assertSameOrigin(request);
     await ensureSeeded();
     const body = await request.json();
     const email = str(body.email).trim().toLowerCase();
+    enforceRateLimit(request, "login", { limit: 8, windowMs: 15 * 60_000 }, email);
+
     const user = await read((db) => db.users.find((u) => u.email === email) ?? null);
-    // Same message either way — never confirm which emails are registered.
     if (!user || !(await verifyPassword(str(body.password), user))) {
       throw new AuthError("Email or password is not right.", 401);
     }
