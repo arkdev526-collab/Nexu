@@ -1,7 +1,11 @@
 const relative = /^\.{1,2}\//;
 const hasExtension = /\.[A-Za-z0-9]+$/;
 
-/** Resolve the app's extensionless relative TypeScript imports for Node's test runner. */
+/**
+ * Resolve the app's extensionless relative TypeScript imports for Node's test
+ * runner. Node itself remains responsible for loading and transforming .ts
+ * files via --experimental-transform-types.
+ */
 export async function resolve(specifier, context, nextResolve) {
   try {
     return await nextResolve(specifier, context);
@@ -11,10 +15,4 @@ export async function resolve(specifier, context, nextResolve) {
     }
     throw error;
   }
-}
-
-/** Force TypeScript domain modules to ESM; Node 22 transforms TS-only syntax. */
-export async function load(url, context, nextLoad) {
-  if (url.endsWith(".ts")) return nextLoad(url, { ...context, format: "module" });
-  return nextLoad(url, context);
 }

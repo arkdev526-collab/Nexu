@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [main]
-  push:
-    branches:
-      - claude/minted-up-marketplace-13sn7o
 
 permissions:
   contents: read
