@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "demo:images": "node scripts/demo-images.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0",

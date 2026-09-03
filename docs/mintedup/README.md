@@ -43,6 +43,20 @@ export ANTHROPIC_API_KEY=sk-ant-...   # turns on the real AI SEO and auto-comple
 export MINTEDUP_DATA_DIR=/var/lib/mintedup   # defaults to ./.data/mintedup
 ```
 
+The seeded lots start without photographs. To put catalogue plates on them:
+
+```bash
+npm i -D playwright && npx playwright install chromium   # once; renderer only
+npm run demo:images                                      # with the dev server running
+```
+
+The plates are **drawn, not photographed** (`scripts/demo-art.mjs`) so nothing in
+the demo could be mistaken for a real object's condition. They are uploaded
+through the ordinary image endpoint and graded by the same standard as a
+seller's own photographs — a useful property, since a flat vector render fails
+the bytes-per-pixel check outright and only passes once it carries the grain a
+real studio plate has.
+
 Without an API key the AI features fall back to a deterministic local generator built
 from the fields the seller has filled in, and say so in the UI. Everything else works.
 
