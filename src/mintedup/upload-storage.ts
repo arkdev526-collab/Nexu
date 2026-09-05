@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   CopyObjectCommand,
   DeleteObjectCommand,
@@ -28,7 +29,10 @@ type R2Config = {
 
 const UPLOAD_TTL_SECONDS = 10 * 60;
 const READ_TTL_SECONDS = 5 * 60;
-const KEY_RE = /^(pending|image)-([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.(\d{13})\.([A-Za-z0-9_-]+)\.(jpg|png|webp)$/;
+const TOKEN_RE = "[A-Za-z0-9_-]{43}";
+const KEY_RE = new RegExp(
+  `^(pending|image)-(${TOKEN_RE})\\.(${TOKEN_RE})\\.(\\d{13})\\.([A-Za-z0-9_-]+)\\.(jpg|png|webp)$`,
+);
 
 let cachedClient: S3Client | null = null;
 let cachedFingerprint = "";
@@ -109,22 +113,14 @@ export function uploadStorageStatus(): UploadStorageStatus {
   };
 }
 
-function encodeId(value: string): string {
-  return Buffer.from(value, "utf8").toString("base64url");
-}
-
-function decodeId(value: string): string | null {
-  try {
-    return Buffer.from(value, "base64url").toString("utf8");
-  } catch {
-    return null;
-  }
+function ownershipToken(kind: "user" | "listing", value: string): string {
+  return createHash("sha256").update(`${kind}\0${value}`, "utf8").digest("base64url");
 }
 
 export type ParsedObjectKey = {
   stage: "pending" | "image";
-  userId: string;
-  listingId: string;
+  userToken: string;
+  listingToken: string;
   createdAt: number;
   imageId: string;
   extension: "jpg" | "png" | "webp";
@@ -133,14 +129,12 @@ export type ParsedObjectKey = {
 export function parseObjectKey(key: string): ParsedObjectKey | null {
   const match = KEY_RE.exec(key);
   if (!match) return null;
-  const userId = decodeId(match[2]);
-  const listingId = decodeId(match[3]);
   const createdAt = Number(match[4]);
-  if (!userId || !listingId || !Number.isFinite(createdAt)) return null;
+  if (!Number.isFinite(createdAt)) return null;
   return {
     stage: match[1] as "pending" | "image",
-    userId,
-    listingId,
+    userToken: match[2],
+    listingToken: match[3],
     createdAt,
     imageId: match[5],
     extension: match[6] as "jpg" | "png" | "webp",
@@ -160,8 +154,8 @@ export function objectKeyBelongsTo(
   const parsed = parseObjectKey(key);
   return Boolean(
     parsed &&
-      parsed.userId === userId &&
-      parsed.listingId === listingId &&
+      parsed.userToken === ownershipToken("user", userId) &&
+      parsed.listingToken === ownershipToken("listing", listingId) &&
       (!stage || parsed.stage === stage),
   );
 }
@@ -174,7 +168,7 @@ export function pendingObjectKey(input: {
   now?: number;
 }): string {
   const createdAt = input.now ?? Date.now();
-  return `pending-${encodeId(input.userId)}.${encodeId(input.listingId)}.${createdAt}.${input.imageId}.${input.extension}`;
+  return `pending-${ownershipToken("user", input.userId)}.${ownershipToken("listing", input.listingId)}.${createdAt}.${input.imageId}.${input.extension}`;
 }
 
 export function finalObjectKey(pendingKey: string): string {
@@ -190,12 +184,17 @@ export async function presignR2Upload(input: {
 }): Promise<{ url: string; expiresIn: number; headers: Record<string, string> }> {
   const parsed = parseObjectKey(input.key);
   if (!parsed || parsed.stage !== "pending") throw new Error("Invalid pending upload key.");
+  if (!Number.isFinite(input.contentLength) || input.contentLength <= 0) {
+    throw new Error("Invalid upload length.");
+  }
   const config = requireR2();
+  // Cloudflare documents Content-Type as the browser-safe restriction for R2
+  // presigned PUTs. Actual byte length is verified with HEAD + body length when
+  // the seller finalises the object, before it enters the listing record.
   const command = new PutObjectCommand({
     Bucket: config.bucket,
     Key: input.key,
     ContentType: input.contentType,
-    ContentLength: input.contentLength,
     CacheControl: "no-store",
   });
   const url = await getSignedUrl(clientFor(config), command, { expiresIn: UPLOAD_TTL_SECONDS });
