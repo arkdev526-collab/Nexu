@@ -5,20 +5,12 @@ import { extensionFor, gradeImage, IMAGE_RULES } from "@/mintedup/images";
 import { ListingError } from "@/mintedup/listings";
 import { assertSameOrigin, enforceRateLimit } from "@/mintedup/security";
 import { deleteUpload, mutate, newId, read, saveUpload } from "@/mintedup/store";
+import { deleteStoredUpload } from "@/mintedup/stored-upload";
 import type { ListingImage } from "@/mintedup/types";
-import {
-  deleteR2Object,
-  isR2ObjectKey,
-  uploadStorageBackend,
-} from "@/mintedup/upload-storage";
+import { uploadStorageBackend } from "@/mintedup/upload-storage";
 
 const MAX_MULTIPART_OVERHEAD = 1024 * 1024;
 const EDITABLE = new Set(["draft", "changes", "rejected"]);
-
-async function deleteStoredUpload(filename: string): Promise<void> {
-  if (isR2ObjectKey(filename)) await deleteR2Object(filename);
-  else await deleteUpload(filename);
-}
 
 function assertEditableListing(
   listing: { sellerId: string; status: string } | undefined,
