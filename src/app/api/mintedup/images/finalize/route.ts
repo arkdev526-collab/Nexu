@@ -29,8 +29,8 @@ async function deleteStoredUpload(filename: string): Promise<void> {
  *
  * No object-storage side effect is executed inside mutate(): the Durable Data
  * Core may replay a mutation callback after an optimistic concurrency conflict.
- * Promotion happens first, the database mutation stays pure, and failures roll
- * the promoted object back afterwards.
+ * Promotion happens first, the database mutation stays pure, and a promoted
+ * object is rolled back only while the database has not yet taken ownership.
  */
 export async function POST(request: Request) {
   let pendingFilename: string | null = null;
@@ -139,10 +139,12 @@ export async function POST(request: Request) {
       return { previousFilename };
     });
 
-    if (result.previousFilename && result.previousFilename !== promotedFilename) {
-      await deleteStoredUpload(result.previousFilename);
-    }
+    // The database now owns the new object. Never include it in rollback for a
+    // later best-effort cleanup failure of the previous image.
     promotedFilename = null;
+    if (result.previousFilename && result.previousFilename !== image.filename) {
+      await deleteStoredUpload(result.previousFilename).catch(() => undefined);
+    }
     return ok({ accepted: true, image, quality }, 201);
   } catch (error) {
     if (pendingFilename) await deleteR2Object(pendingFilename).catch(() => undefined);
