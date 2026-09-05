@@ -1,6 +1,6 @@
 import { requireUser } from "@/mintedup/auth";
+import { extensionForMime, validateImageUploadIntent } from "@/mintedup/image-upload-policy";
 import { fail, ok } from "@/mintedup/http";
-import { IMAGE_RULES } from "@/mintedup/images";
 import { ListingError } from "@/mintedup/listings";
 import { assertSameOrigin, enforceRateLimit } from "@/mintedup/security";
 import { newId, read } from "@/mintedup/store";
@@ -13,14 +13,6 @@ import {
 } from "@/mintedup/upload-storage";
 
 const EDITABLE = new Set(["draft", "changes", "rejected"]);
-
-type AllowedMime = (typeof IMAGE_RULES.allowed)[number];
-
-function extensionForMime(type: AllowedMime): "jpg" | "png" | "webp" {
-  if (type === "image/jpeg") return "jpg";
-  if (type === "image/png") return "png";
-  return "webp";
-}
 
 async function assertSellerCanEdit(listingId: string, userId: string): Promise<void> {
   await read((db) => {
@@ -49,20 +41,12 @@ export async function POST(request: Request) {
 
     const body = await request.json().catch(() => ({}));
     const listingId = String(body.listingId ?? "");
-    const slot = Number(body.slot ?? -1);
-    const contentType = String(body.contentType ?? "") as AllowedMime;
-    const size = Number(body.size ?? -1);
-
     if (!listingId) throw new ListingError("Listing is required.", 400);
-    if (!Number.isInteger(slot) || slot < 0 || slot >= IMAGE_RULES.maxSlots) {
-      throw new ListingError(`Slot must be between 1 and ${IMAGE_RULES.maxSlots}.`, 400);
-    }
-    if (!IMAGE_RULES.allowed.includes(contentType)) {
-      throw new ListingError("Minted Up accepts JPEG, PNG and WebP only.", 415);
-    }
-    if (!Number.isFinite(size) || size <= 0 || size > IMAGE_RULES.maxBytes) {
-      throw new ListingError("Image exceeds the 25 MB upload ceiling.", 413);
-    }
+    const intent = validateImageUploadIntent({
+      slot: Number(body.slot ?? -1),
+      contentType: String(body.contentType ?? ""),
+      size: Number(body.size ?? -1),
+    });
 
     await assertSellerCanEdit(listingId, user.id);
 
@@ -74,12 +58,12 @@ export async function POST(request: Request) {
       userId: user.id,
       listingId,
       imageId,
-      extension: extensionForMime(contentType),
+      extension: extensionForMime(intent.contentType),
     });
     const signed = await presignR2Upload({
       key: filename,
-      contentType,
-      contentLength: size,
+      contentType: intent.contentType,
+      contentLength: intent.size,
     });
 
     return ok({
