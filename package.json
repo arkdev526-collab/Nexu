@@ -7,7 +7,7 @@
     "build": "next build",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-transform-types --experimental-loader ./scripts/mintedup-ts-loader.mjs --test tests/mintedup/proof.test.mjs tests/mintedup/research-v2.test.mjs tests/mintedup/source-library.test.mjs tests/mintedup/met-ingestion.test.mjs tests/mintedup/durable-store.test.mjs",
+    "test": "node --experimental-transform-types --experimental-loader ./scripts/mintedup-ts-loader.mjs --test tests/mintedup/proof.test.mjs tests/mintedup/research-v2.test.mjs tests/mintedup/source-library.test.mjs tests/mintedup/met-ingestion.test.mjs tests/mintedup/durable-store.test.mjs tests/mintedup/upload-storage.test.mjs",
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
     "db:status": "node --experimental-transform-types --experimental-loader ./scripts/mintedup-ts-loader.mjs scripts/mintedup-db.mjs status",
     "db:migrate": "node --experimental-transform-types --experimental-loader ./scripts/mintedup-ts-loader.mjs scripts/mintedup-db.mjs migrate",
