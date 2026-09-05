@@ -11,7 +11,7 @@ import {
   headR2Object,
   objectKeyBelongsTo,
   parseObjectKey,
-  promotePendingR2Object,
+  promoteValidatedR2Object,
   readR2Object,
   uploadStorageBackend,
 } from "@/mintedup/upload-storage";
@@ -101,9 +101,10 @@ export async function POST(request: Request) {
       throw new ListingError("The file contents do not match the declared image type.", 415);
     }
 
-    promotedFilename = await promotePendingR2Object({
+    promotedFilename = await promoteValidatedR2Object({
       pendingKey: filename,
       contentType: expectedMime,
+      bytes,
     });
     pendingFilename = null;
 

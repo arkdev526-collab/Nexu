@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
-  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -29,6 +28,9 @@ type R2Config = {
 
 const UPLOAD_TTL_SECONDS = 10 * 60;
 const READ_TTL_SECONDS = 5 * 60;
+const HEALTH_PROBE_TIMEOUT_MS = 5_000;
+const HEALTH_CLEANUP_TIMEOUT_MS = 2_000;
+const HEALTH_BODY = Buffer.from("ok", "utf8");
 const TOKEN_RE = "[A-Za-z0-9_-]{43}";
 const KEY_RE = new RegExp(
   `^(pending|image)-(${TOKEN_RE})\\.(${TOKEN_RE})\\.(\\d{13})\\.([A-Za-z0-9_-]+)\\.(jpg|png|webp)$`,
@@ -74,6 +76,10 @@ function clientFor(config: R2Config): S3Client {
     cachedClient = new S3Client({
       region: "auto",
       endpoint: config.endpoint,
+      // Presigned browser PUTs have no Body at signing time. Do not let the SDK
+      // attach the checksum of an empty body to a URL intended for image bytes.
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
       credentials: {
         accessKeyId: config.accessKeyId,
         secretAccessKey: config.secretAccessKey,
@@ -84,7 +90,71 @@ function clientFor(config: R2Config): S3Client {
   return cachedClient;
 }
 
-export function uploadStorageStatus(): UploadStorageStatus {
+export async function probeR2Bucket(): Promise<void> {
+  const config = requireR2();
+  const client = clientFor(config);
+  const key = `pending-health-${Date.now()}-${randomUUID().replace(/-/g, "")}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+  let cleanupNeeded = false;
+  try {
+    await client.send(
+      new PutObjectCommand({
+        Bucket: config.bucket,
+        Key: key,
+        Body: HEALTH_BODY,
+        ContentLength: HEALTH_BODY.length,
+        ContentType: "application/octet-stream",
+        CacheControl: "no-store",
+        IfNoneMatch: "*",
+      }),
+      { abortSignal: controller.signal },
+    );
+    cleanupNeeded = true;
+
+    const head = await client.send(
+      new HeadObjectCommand({ Bucket: config.bucket, Key: key }),
+      { abortSignal: controller.signal },
+    );
+    if (Number(head.ContentLength ?? -1) !== HEALTH_BODY.length) {
+      throw new Error("R2 health object metadata did not match.");
+    }
+
+    const result = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }), {
+      abortSignal: controller.signal,
+    });
+    if (!result.Body) throw new Error("R2 health object had no body.");
+    const bytes = Buffer.from(await result.Body.transformToByteArray());
+    if (!bytes.equals(HEALTH_BODY)) throw new Error("R2 health object body did not match.");
+
+    await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }), {
+      abortSignal: controller.signal,
+    });
+    cleanupNeeded = false;
+  } finally {
+    clearTimeout(timeout);
+    if (cleanupNeeded) {
+      const cleanupController = new AbortController();
+      const cleanupTimeout = setTimeout(
+        () => cleanupController.abort(),
+        HEALTH_CLEANUP_TIMEOUT_MS,
+      );
+      try {
+        await client
+          .send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }), {
+            abortSignal: cleanupController.signal,
+          })
+          .catch(() => undefined);
+      } finally {
+        clearTimeout(cleanupTimeout);
+      }
+    }
+  }
+}
+
+export async function uploadStorageStatus(
+  probe: () => Promise<void> = probeR2Bucket,
+): Promise<UploadStorageStatus> {
   const backend = uploadStorageBackend();
   if (backend === "file") {
     return {
@@ -101,15 +171,39 @@ export function uploadStorageStatus(): UploadStorageStatus {
   }
 
   const config = r2Config();
+  if (!config) {
+    return {
+      backend,
+      durable: false,
+      configured: false,
+      ready: false,
+      bucket: null,
+      detail: "R2 is selected but required credentials or bucket configuration are missing.",
+    };
+  }
+
+  try {
+    await probe();
+  } catch {
+    return {
+      backend,
+      durable: true,
+      configured: true,
+      ready: false,
+      bucket: config.bucket,
+      detail:
+        "Private R2 configuration is present, but the live read/write/delete health probe failed. Verify the endpoint, bucket and bucket-scoped credentials.",
+    };
+  }
+
   return {
     backend,
-    durable: Boolean(config),
-    configured: Boolean(config),
-    ready: Boolean(config),
-    bucket: config?.bucket ?? null,
-    detail: config
-      ? "Private R2 object storage is configured; uploads use short-lived signed URLs."
-      : "R2 is selected but required credentials or bucket configuration are missing.",
+    durable: true,
+    configured: true,
+    ready: true,
+    bucket: config.bucket,
+    detail:
+      "Private R2 object storage passed its live read/write/delete health probe; uploads use short-lived signed URLs.",
   };
 }
 
@@ -188,16 +282,21 @@ export async function presignR2Upload(input: {
     throw new Error("Invalid upload length.");
   }
   const config = requireR2();
-  // Cloudflare documents Content-Type as the browser-safe restriction for R2
-  // presigned PUTs. Actual byte length is verified with HEAD + body length when
-  // the seller finalises the object, before it enters the listing record.
+  // The exact announced byte length and MIME type are both signed. Actual
+  // bytes are still verified at finalisation before entering the listing.
   const command = new PutObjectCommand({
     Bucket: config.bucket,
     Key: input.key,
     ContentType: input.contentType,
+    ContentLength: input.contentLength,
     CacheControl: "no-store",
   });
-  const url = await getSignedUrl(clientFor(config), command, { expiresIn: UPLOAD_TTL_SECONDS });
+  const url = await getSignedUrl(clientFor(config), command, {
+    expiresIn: UPLOAD_TTL_SECONDS,
+    // Bind both browser-controlled MIME and browser-computed Content-Length to
+    // the signature. R2 rejects a reused URL when either value differs.
+    signableHeaders: new Set(["content-length", "content-type"]),
+  });
   return {
     url,
     expiresIn: UPLOAD_TTL_SECONDS,
@@ -234,23 +333,73 @@ export async function deleteR2Object(key: string): Promise<void> {
   await clientFor(config).send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }));
 }
 
-export async function promotePendingR2Object(input: {
-  pendingKey: string;
+export type R2PromotionDrivers = {
+  delete: (key: string) => Promise<void>;
+  put: (input: {
+    key: string;
+    bytes: Buffer;
+    contentType: string;
+  }) => Promise<void>;
+};
+
+async function putValidatedR2Object(input: {
+  key: string;
+  bytes: Buffer;
   contentType: string;
-}): Promise<string> {
+}): Promise<void> {
   const config = requireR2();
-  const destination = finalObjectKey(input.pendingKey);
   await clientFor(config).send(
-    new CopyObjectCommand({
+    new PutObjectCommand({
       Bucket: config.bucket,
-      Key: destination,
-      CopySource: `${config.bucket}/${encodeURIComponent(input.pendingKey)}`,
+      Key: input.key,
+      Body: input.bytes,
+      ContentLength: input.bytes.length,
       ContentType: input.contentType,
       CacheControl: "public, max-age=31536000, immutable",
-      MetadataDirective: "REPLACE",
+      IfNoneMatch: "*",
     }),
   );
-  await deleteR2Object(input.pendingKey);
+}
+
+const defaultPromotionDrivers: R2PromotionDrivers = {
+  delete: deleteR2Object,
+  put: putValidatedR2Object,
+};
+
+export async function promoteValidatedR2Object(
+  input: {
+    pendingKey: string;
+    contentType: string;
+    bytes: Buffer;
+    promotionId?: string;
+  },
+  drivers: R2PromotionDrivers = defaultPromotionDrivers,
+): Promise<string> {
+  const parsed = parseObjectKey(input.pendingKey);
+  if (!parsed || parsed.stage !== "pending") throw new Error("Invalid pending upload key.");
+  if (input.bytes.length <= 0) throw new Error("Validated image bytes are required.");
+
+  const promotionId = input.promotionId ?? randomUUID().replace(/-/g, "");
+  if (!/^[A-Za-z0-9_-]+$/.test(promotionId)) throw new Error("Invalid promotion id.");
+  const destination = `image-${parsed.userToken}.${parsed.listingToken}.${parsed.createdAt}.${parsed.imageId}-${promotionId}.${parsed.extension}`;
+
+  // Delete the reusable pending target before creating the immutable image.
+  // If deletion fails, no destination exists to orphan. The final object is
+  // then written from the exact buffer that passed validation, so later reuse
+  // of the presigned URL cannot change the accepted bytes.
+  await drivers.delete(input.pendingKey);
+  try {
+    await drivers.put({
+      key: destination,
+      bytes: input.bytes,
+      contentType: input.contentType,
+    });
+  } catch (error) {
+    // A transport error can be ambiguous after R2 received a PUT. The unique
+    // promotion key makes an unconditional cleanup retry safe.
+    await drivers.delete(destination).catch(() => undefined);
+    throw error;
+  }
   return destination;
 }
 

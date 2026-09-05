@@ -109,7 +109,7 @@ export async function storageStatus(): Promise<{
   message: string;
 }> {
   const config = storeConfigSummary();
-  const uploads = uploadStorageStatus();
+  const uploads = await uploadStorageStatus();
   const uploadFields = {
     uploadBackend: uploads.backend,
     uploadsConfigured: uploads.configured,

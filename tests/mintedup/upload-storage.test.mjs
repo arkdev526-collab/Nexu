@@ -3,13 +3,16 @@ import test from "node:test";
 
 const { IMAGE_RULES } = await import("../../src/mintedup/images.ts");
 const { validateImageUploadIntent } = await import("../../src/mintedup/image-upload-policy.ts");
-const { deleteStoredUpload } = await import("../../src/mintedup/stored-upload.ts");
+const { deleteStoredUpload, readStoredUpload } = await import(
+  "../../src/mintedup/stored-upload.ts"
+);
 const {
   finalObjectKey,
   objectKeyBelongsTo,
   parseObjectKey,
   pendingObjectKey,
   presignR2Upload,
+  promoteValidatedR2Object,
   uploadStorageBackend,
   uploadStorageStatus,
 } = await import("../../src/mintedup/upload-storage.ts");
@@ -133,15 +136,140 @@ test("stored image deletion dispatches R2 objects and local files to different d
   ]);
 });
 
-test("filesystem uploads are explicitly non-durable in production", () => {
-  withEnv(
+test("stored image reads dispatch accepted R2 objects and local files", async () => {
+  const calls = [];
+  const drivers = {
+    local: async (filename) => {
+      calls.push(["file", filename]);
+      return Buffer.from("local");
+    },
+    r2: async (filename) => {
+      calls.push(["r2", filename]);
+      return Buffer.from("r2");
+    },
+  };
+  const pending = pendingObjectKey({
+    userId: "usr_a",
+    listingId: "lst_a",
+    imageId: "img_a",
+    extension: "jpg",
+    now: 1_788_566_400_000,
+  });
+  const durable = finalObjectKey(pending);
+
+  assert.equal((await readStoredUpload("img_local123.jpg", drivers))?.toString(), "local");
+  assert.equal((await readStoredUpload(durable, drivers))?.toString(), "r2");
+  assert.equal(await readStoredUpload(pending, drivers), null);
+  assert.deepEqual(calls, [
+    ["file", "img_local123.jpg"],
+    ["r2", durable],
+  ]);
+});
+
+test("promotion writes the exact validated bytes only after pending deletion", async () => {
+  const pending = pendingObjectKey({
+    userId: "usr_a",
+    listingId: "lst_a",
+    imageId: "img_a",
+    extension: "jpg",
+    now: 1_788_566_400_000,
+  });
+  const bytes = Buffer.from("validated-image-bytes");
+  const calls = [];
+  const destination = await promoteValidatedR2Object(
+    {
+      pendingKey: pending,
+      contentType: "image/jpeg",
+      bytes,
+      promotionId: "promotion_1",
+    },
+    {
+      delete: async (key) => calls.push(["delete", key]),
+      put: async (input) => calls.push(["put", input]),
+    },
+  );
+
+  assert.equal(parseObjectKey(destination)?.stage, "image");
+  assert.equal(calls[0][0], "delete");
+  assert.equal(calls[0][1], pending);
+  assert.equal(calls[1][0], "put");
+  assert.equal(calls[1][1].key, destination);
+  assert.equal(calls[1][1].bytes, bytes);
+  assert.equal(calls[1][1].contentType, "image/jpeg");
+});
+
+test("promotion cannot orphan a final object when pending deletion fails", async () => {
+  const pending = pendingObjectKey({
+    userId: "usr_a",
+    listingId: "lst_a",
+    imageId: "img_a",
+    extension: "jpg",
+    now: 1_788_566_400_000,
+  });
+  let putCalled = false;
+
+  await assert.rejects(
+    promoteValidatedR2Object(
+      {
+        pendingKey: pending,
+        contentType: "image/jpeg",
+        bytes: Buffer.from("validated"),
+        promotionId: "promotion_2",
+      },
+      {
+        delete: async () => {
+          throw new Error("pending delete failed");
+        },
+        put: async () => {
+          putCalled = true;
+        },
+      },
+    ),
+    /pending delete failed/,
+  );
+  assert.equal(putCalled, false);
+});
+
+test("promotion cleans a unique final key after an ambiguous PUT failure", async () => {
+  const pending = pendingObjectKey({
+    userId: "usr_a",
+    listingId: "lst_a",
+    imageId: "img_a",
+    extension: "jpg",
+    now: 1_788_566_400_000,
+  });
+  const deleted = [];
+
+  await assert.rejects(
+    promoteValidatedR2Object(
+      {
+        pendingKey: pending,
+        contentType: "image/jpeg",
+        bytes: Buffer.from("validated"),
+        promotionId: "promotion_3",
+      },
+      {
+        delete: async (key) => deleted.push(key),
+        put: async () => {
+          throw new Error("ambiguous PUT failure");
+        },
+      },
+    ),
+    /ambiguous PUT failure/,
+  );
+  assert.equal(deleted[0], pending);
+  assert.equal(parseObjectKey(deleted[1])?.stage, "image");
+});
+
+test("filesystem uploads are explicitly non-durable in production", async () => {
+  await withEnvAsync(
     {
       NODE_ENV: "production",
       MINTEDUP_UPLOAD_BACKEND: "file",
     },
-    () => {
+    async () => {
       assert.equal(uploadStorageBackend(), "file");
-      const status = uploadStorageStatus();
+      const status = await uploadStorageStatus();
       assert.equal(status.backend, "file");
       assert.equal(status.durable, false);
       assert.equal(status.configured, true);
@@ -150,8 +278,8 @@ test("filesystem uploads are explicitly non-durable in production", () => {
   );
 });
 
-test("R2 is not reported ready when any required secret setting is missing", () => {
-  withEnv(
+test("R2 is not reported ready when any required secret setting is missing", async () => {
+  await withEnvAsync(
     {
       MINTEDUP_UPLOAD_BACKEND: "r2",
       MINTEDUP_R2_ACCOUNT_ID: "account",
@@ -159,12 +287,55 @@ test("R2 is not reported ready when any required secret setting is missing", () 
       MINTEDUP_R2_ACCESS_KEY_ID: "access",
       MINTEDUP_R2_SECRET_ACCESS_KEY: undefined,
     },
-    () => {
-      const status = uploadStorageStatus();
+    async () => {
+      const status = await uploadStorageStatus();
       assert.equal(status.backend, "r2");
       assert.equal(status.configured, false);
       assert.equal(status.ready, false);
       assert.equal(status.durable, false);
+    },
+  );
+});
+
+test("configured R2 is not ready when its live bucket probe fails", async () => {
+  await withEnvAsync(
+    {
+      MINTEDUP_UPLOAD_BACKEND: "r2",
+      MINTEDUP_R2_ACCOUNT_ID: "account",
+      MINTEDUP_R2_BUCKET: "mintedup-images",
+      MINTEDUP_R2_ACCESS_KEY_ID: "access",
+      MINTEDUP_R2_SECRET_ACCESS_KEY: "secret",
+    },
+    async () => {
+      const status = await uploadStorageStatus(async () => {
+        throw new Error("bucket unavailable");
+      });
+      assert.equal(status.configured, true);
+      assert.equal(status.durable, true);
+      assert.equal(status.ready, false);
+      assert.match(status.detail, /health probe failed/);
+    },
+  );
+});
+
+test("configured R2 is ready only after its live bucket probe passes", async () => {
+  await withEnvAsync(
+    {
+      MINTEDUP_UPLOAD_BACKEND: "r2",
+      MINTEDUP_R2_ACCOUNT_ID: "account",
+      MINTEDUP_R2_BUCKET: "mintedup-images",
+      MINTEDUP_R2_ACCESS_KEY_ID: "access",
+      MINTEDUP_R2_SECRET_ACCESS_KEY: "secret",
+    },
+    async () => {
+      let probes = 0;
+      const status = await uploadStorageStatus(async () => {
+        probes += 1;
+      });
+      assert.equal(probes, 1);
+      assert.equal(status.configured, true);
+      assert.equal(status.durable, true);
+      assert.equal(status.ready, true);
     },
   );
 });
@@ -194,7 +365,7 @@ test("presign rejects malformed keys and impossible lengths before touching R2",
   );
 });
 
-test("configured R2 generates a short-lived content-type-bound PUT URL without network I/O", async () => {
+test("configured R2 signs exact length and content type without network I/O", async () => {
   await withEnvAsync(
     {
       MINTEDUP_UPLOAD_BACKEND: "r2",
@@ -222,6 +393,9 @@ test("configured R2 generates a short-lived content-type-bound PUT URL without n
       assert.match(signed.url, /^https:\/\//);
       assert.match(signed.url, /X-Amz-Algorithm=AWS4-HMAC-SHA256/);
       assert.match(signed.url, /X-Amz-Expires=600/);
+      const signedHeaders = new URL(signed.url).searchParams.get("X-Amz-SignedHeaders");
+      assert.equal(signedHeaders, "content-length;content-type;host");
+      assert.equal(new URL(signed.url).searchParams.has("x-amz-checksum-crc32"), false);
     },
   );
 });

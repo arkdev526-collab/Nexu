@@ -18,10 +18,10 @@ The browser never receives an R2 API credential.
 1. The signed-in seller selects a JPEG, PNG or WebP in the existing 30-slot composer.
 2. The browser measures focus as before.
 3. `POST /api/mintedup/images/presign` re-authenticates the seller, applies same-origin/rate-limit checks, validates the slot/MIME/announced size, and verifies listing ownership plus editable state.
-4. Minted Up generates an opaque `pending-...` object key and a short-lived presigned `PUT` URL restricted to the declared `Content-Type`.
+4. Minted Up generates an opaque `pending-...` object key and a short-lived presigned `PUT` URL whose signature binds the declared `Content-Type` and exact `Content-Length`.
 5. The browser uploads the image bytes directly to the private R2 bucket.
 6. `POST /api/mintedup/images/finalize` re-authenticates and re-checks ownership/state, uses `HEAD` to inspect object metadata, reads the stored bytes, re-runs Minted Up's server-side image-quality/content sniffing, and verifies actual content against the declared MIME type.
-7. Accepted bytes are promoted from `pending-...` to an immutable `image-...` object key.
+7. The reusable pending target is deleted, then the exact validated buffer is written to a unique immutable `image-...` object key. The final image is never copied from bytes that can still be overwritten through the presigned URL.
 8. Only then is the listing record updated. The Durable Data Core mutation callback contains no R2 side effects, so optimistic-concurrency retries cannot replay an upload/delete operation.
 9. Replaced objects are cleaned up after the database has taken ownership of the new object.
 10. The stable `/api/mintedup/images/<filename>` route issues a short-lived signed read redirect for durable objects. Local development files continue to stream through the same route.
@@ -39,7 +39,9 @@ Failed direct uploads use an authenticated cleanup endpoint. A bucket lifecycle 
 - Pending keys cannot be served by the public image route.
 - Listing ownership and editable status are checked at presign **and again** at finalisation.
 - JPEG/PNG/WebP allow-list, 25 MB ceiling, 30-slot ceiling, content sniffing and image-quality grading remain server-enforced.
+- The presigned PUT signs the exact announced byte length and MIME type, so the same URL cannot authorise a larger object or a different declared media type.
 - The stored object's actual byte length is checked before acceptance; the client-supplied size is not trusted.
+- The final object is written from the exact buffer that passed validation, after the reusable pending target has been deleted.
 - External object-storage operations do not run inside a replayable Durable Data Core `mutate()` callback.
 - The bucket stays private. Listing reads use short-lived signed GET URLs.
 
@@ -65,7 +67,7 @@ Do not commit real values. Do not expose them through `NEXT_PUBLIC_*` variables.
 
 ## R2 credentials
 
-Create credentials scoped to the Minted Up bucket with only the object permissions needed by the server-side S3 client. The application needs to PUT, GET/HEAD, COPY and DELETE objects in that bucket. Do not use a global Cloudflare account token as the application credential when a bucket-scoped R2 token is available.
+Create credentials scoped to the Minted Up bucket with only the object permissions needed by the server-side S3 client. The application needs to PUT, GET/HEAD and DELETE objects in that bucket. Do not use a global Cloudflare account token as the application credential when a bucket-scoped R2 token is available.
 
 ## Browser CORS
 
@@ -97,7 +99,7 @@ Action: delete objects
 Age: 1 day
 ```
 
-Accepted images are renamed/promoted to the separate `image-` prefix and therefore do not match this rule.
+Accepted images are written to the separate `image-` prefix and therefore do not match this rule.
 
 The application also calls the authenticated cancel endpoint when a direct browser PUT fails, but lifecycle cleanup is the authoritative backstop for browser crashes, closed tabs and lost network connections.
 
@@ -123,7 +125,7 @@ Do not set `MINTEDUP_UPLOAD_BACKEND=r2` until the bucket is ready.
 4. Add the `pending-` one-day lifecycle rule.
 5. Put the five R2 environment values in the **canonical** Vercel project only.
 6. Redeploy.
-7. Open `/mintedup/admin/data` as an administrator and confirm image backend = `r2`, configured = yes, durable = yes, ready = yes.
+7. Open `/mintedup/admin/data` as an administrator and confirm image backend = `r2`, configured = yes, durable = yes, ready = yes. The ready result must come from the live read/write/delete probe, which creates, verifies and removes a two-byte `pending-health-...` object; environment-variable presence alone is never treated as ready.
 8. As a seller, upload an accepted image and verify the slot displays it after a fresh request.
 9. Replace the image and verify the replacement remains while the old object is removed.
 10. Delete an image and verify the listing record and object both disappear.

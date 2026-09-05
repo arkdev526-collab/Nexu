@@ -5,7 +5,8 @@ import { fail, ok, str } from "@/mintedup/http";
 import { ListingError } from "@/mintedup/listings";
 import { termsFromSignals } from "@/mintedup/research";
 import { assertSameOrigin, enforceRateLimit } from "@/mintedup/security";
-import { read, readUpload } from "@/mintedup/store";
+import { read } from "@/mintedup/store";
+import { readStoredUpload } from "@/mintedup/stored-upload";
 
 export async function POST(request: Request) {
   try {
@@ -33,7 +34,7 @@ export async function POST(request: Request) {
 
     const images: { base64: string; mediaType: string }[] = [];
     for (const image of context.images) {
-      const bytes = await readUpload(image.filename);
+      const bytes = await readStoredUpload(image.filename);
       if (bytes) images.push({ base64: bytes.toString("base64"), mediaType: image.mediaType });
     }
     if (images.length === 0) throw new ListingError("The listing photographs could not be read.", 422);
