@@ -14,6 +14,7 @@ import {
   invalidateDerivedResearchCaches,
   normaliseDatabase,
 } from "./store-shared";
+import { uploadStorageStatus } from "./upload-storage";
 
 const DATA_DIR = process.env.MINTEDUP_DATA_DIR
   ? path.resolve(process.env.MINTEDUP_DATA_DIR)
@@ -100,10 +101,23 @@ export async function storageStatus(): Promise<{
   revision: number | null;
   updatedAt: string | null;
   autoMigrate: boolean;
+  uploadBackend: "file" | "r2";
+  uploadsConfigured: boolean;
+  uploadsReady: boolean;
   uploadsDurable: boolean;
+  uploadMessage: string;
   message: string;
 }> {
   const config = storeConfigSummary();
+  const uploads = uploadStorageStatus();
+  const uploadFields = {
+    uploadBackend: uploads.backend,
+    uploadsConfigured: uploads.configured,
+    uploadsReady: uploads.ready,
+    uploadsDurable: uploads.durable,
+    uploadMessage: uploads.detail,
+  };
+
   if (config.backend === "file") {
     let updatedAt: string | null = null;
     try {
@@ -119,7 +133,7 @@ export async function storageStatus(): Promise<{
       revision: null,
       updatedAt,
       autoMigrate: false,
-      uploadsDurable: false,
+      ...uploadFields,
       message: "Local file store is active. Suitable for development only.",
     };
   }
@@ -133,7 +147,7 @@ export async function storageStatus(): Promise<{
       revision: null,
       updatedAt: null,
       autoMigrate: config.autoMigrate,
-      uploadsDurable: false,
+      ...uploadFields,
       message: "Postgres backend selected but no valid connection string is configured.",
     };
   }
@@ -148,9 +162,11 @@ export async function storageStatus(): Promise<{
       revision: status.revision,
       updatedAt: status.updatedAt,
       autoMigrate: config.autoMigrate,
-      uploadsDurable: false,
+      ...uploadFields,
       message: status.ready
-        ? "Shared Postgres state is active. Listing image bytes still require object storage."
+        ? uploads.ready
+          ? "Shared Postgres state is active. Durable listing-image storage is also configured."
+          : "Shared Postgres state is active. Listing-image storage is not production-ready yet."
         : "Postgres is configured but the Minted Up state row is unavailable.",
     };
   } catch (error) {
@@ -162,7 +178,7 @@ export async function storageStatus(): Promise<{
       revision: null,
       updatedAt: null,
       autoMigrate: config.autoMigrate,
-      uploadsDurable: false,
+      ...uploadFields,
       message: error instanceof Error ? error.message : "Postgres health check failed.",
     };
   }
@@ -177,7 +193,9 @@ export async function migrateFileSnapshotToPostgres(input: {
   const raw = await fs.readFile(filename, "utf8");
   const snapshot = normaliseDatabase(JSON.parse(raw));
   const connectionString = input.connectionString ?? postgresConnectionString();
-  if (!connectionString) throw new DurableStoreError("A Postgres connection string is required for migration.");
+  if (!connectionString) {
+    throw new DurableStoreError("A Postgres connection string is required for migration.");
+  }
   const store = createPostgresStateStore({ connectionString, autoMigrate: true });
   const result = await store.replaceSnapshot(snapshot, { onlyIfEmpty: !input.force });
   return { ...result, sourceFile: filename };
@@ -187,10 +205,7 @@ function safeUploadName(filename: string): boolean {
   return /^[A-Za-z0-9_.-]+$/.test(filename) && !filename.includes("..");
 }
 
-/**
- * Upload bytes remain filesystem-backed for now. The database cutover is a
- * separate concern from the object-storage release gate.
- */
+/** Local-development upload path. Production images use durable object storage. */
 export async function saveUpload(id: string, ext: string, bytes: Buffer): Promise<string> {
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
   const filename = `${id}.${ext}`;
