@@ -11,12 +11,40 @@ type SlotState = {
   rejection: ImageQuality | null;
 };
 
+type PresignResult =
+  | { mode: "multipart" }
+  | {
+      mode: "r2";
+      filename: string;
+      uploadUrl: string;
+      headers: Record<string, string>;
+      expiresIn: number;
+    };
+
+function failedQuality(file: File, sharpness: number | null, message: string): ImageQuality {
+  return {
+    width: 0,
+    height: 0,
+    megapixels: 0,
+    bytes: file.size,
+    format: "jpeg",
+    bytesPerPixel: 0,
+    sharpness,
+    score: 0,
+    accepted: false,
+    failures: [message],
+    warnings: [],
+  };
+}
+
 /**
  * The 30-slot upload grid.
  *
  * Slot 1 is the cover. Every file is measured for focus in the browser, then
  * graded by the server against the published standard; a rejected file is
- * never stored, and the reason is shown against the slot that refused it.
+ * never attached to the listing, and the reason is shown against the slot that
+ * refused it. Production bytes upload directly to private R2 with a short-lived
+ * signed URL; development retains the original local multipart path.
  */
 export function ImageSlots({
   listingId,
@@ -42,41 +70,113 @@ export function ImageSlots({
     }));
   }
 
+  async function cancelPending(filename: string) {
+    await fetch("/api/mintedup/images/presign", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ listingId, filename }),
+    }).catch(() => undefined);
+  }
+
   async function upload(file: File, slot: number) {
     setSlot(slot, { busy: true, rejection: null });
-    const sharpness = await measureSharpness(file);
+    let pendingFilename: string | null = null;
+    let sharpness: number | null = null;
 
-    const form = new FormData();
-    form.set("file", file);
-    form.set("listingId", listingId);
-    form.set("slot", String(slot));
-    if (sharpness !== null) form.set("sharpness", String(sharpness));
+    try {
+      sharpness = await measureSharpness(file);
 
-    const response = await fetch("/api/mintedup/images", { method: "POST", body: form });
-    const body = await response.json().catch(() => ({}));
+      const presignResponse = await fetch("/api/mintedup/images/presign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          listingId,
+          slot,
+          contentType: file.type,
+          size: file.size,
+        }),
+      });
+      const presignBody = (await presignResponse.json().catch(() => ({}))) as Partial<PresignResult> & {
+        error?: string;
+      };
 
-    if (response.status === 422 && body.quality) {
-      setSlot(slot, { busy: false, rejection: body.quality });
-      return;
-    }
-    if (!response.ok) {
+      if (!presignResponse.ok || !presignBody.mode) {
+        throw new Error(presignBody.error ?? "Could not prepare the image upload.");
+      }
+
+      let response: Response;
+      let body: { image?: ListingImage; quality?: ImageQuality; error?: string };
+
+      if (presignBody.mode === "r2") {
+        if (!presignBody.filename || !presignBody.uploadUrl) {
+          throw new Error("The image upload session was incomplete.");
+        }
+        pendingFilename = presignBody.filename;
+        const directResponse = await fetch(presignBody.uploadUrl, {
+          method: "PUT",
+          headers: presignBody.headers ?? { "Content-Type": file.type },
+          body: file,
+        });
+        if (!directResponse.ok) {
+          throw new Error(`Object storage refused the upload (${directResponse.status}).`);
+        }
+
+        response = await fetch("/api/mintedup/images/finalize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            listingId,
+            slot,
+            filename: pendingFilename,
+            size: file.size,
+            sharpness,
+          }),
+        });
+        body = await response.json().catch(() => ({}));
+        // Once finalisation responds, the server owns pending/final object
+        // cleanup on every success and error path.
+        pendingFilename = null;
+      } else {
+        const form = new FormData();
+        form.set("file", file);
+        form.set("listingId", listingId);
+        form.set("slot", String(slot));
+        if (sharpness !== null) form.set("sharpness", String(sharpness));
+
+        response = await fetch("/api/mintedup/images", { method: "POST", body: form });
+        body = await response.json().catch(() => ({}));
+      }
+
+      if (response.status === 422 && body.quality) {
+        setSlot(slot, { busy: false, rejection: body.quality });
+        return;
+      }
+      if (!response.ok || !body.image) {
+        throw new Error(body.error ?? "Upload failed.");
+      }
+
+      setSlot(slot, { busy: false, rejection: null });
+      onChange(
+        [...images.filter((image) => image.slot !== slot), body.image].sort(
+          (a, b) => a.slot - b.slot,
+        ),
+      );
+    } catch (error) {
+      if (pendingFilename) await cancelPending(pendingFilename);
       setSlot(slot, {
         busy: false,
-        rejection: {
-          width: 0, height: 0, megapixels: 0, bytes: file.size, format: "jpeg",
-          bytesPerPixel: 0, sharpness, score: 0, accepted: false,
-          failures: [body.error ?? "Upload failed."], warnings: [],
-        },
+        rejection: failedQuality(
+          file,
+          sharpness,
+          error instanceof Error ? error.message : "Upload failed.",
+        ),
       });
-      return;
     }
-    setSlot(slot, { busy: false, rejection: null });
-    onChange([...images.filter((i) => i.slot !== slot), body.image].sort((a, b) => a.slot - b.slot));
   }
 
   /** Fill the first free slots, so a bulk drop of 12 photographs just works. */
   async function uploadMany(files: File[], startSlot?: number) {
-    const taken = new Set(images.map((i) => i.slot));
+    const taken = new Set(images.map((image) => image.slot));
     let cursor = startSlot ?? 0;
     for (const file of files) {
       while (cursor < IMAGE_RULES.maxSlots && taken.has(cursor) && startSlot === undefined) {
@@ -90,8 +190,11 @@ export function ImageSlots({
   }
 
   async function remove(slot: number) {
-    await fetch(`/api/mintedup/images?listingId=${listingId}&slot=${slot}`, { method: "DELETE" });
-    onChange(images.filter((i) => i.slot !== slot));
+    const response = await fetch(`/api/mintedup/images?listingId=${listingId}&slot=${slot}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) return;
+    onChange(images.filter((image) => image.slot !== slot));
     setSlot(slot, { busy: false, rejection: null });
   }
 
@@ -122,7 +225,7 @@ export function ImageSlots({
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
-          void uploadMany([...event.dataTransfer.files].filter((f) => f.type.startsWith("image/")));
+          void uploadMany([...event.dataTransfer.files].filter((file) => file.type.startsWith("image/")));
         }}
       >
         {Array.from({ length: IMAGE_RULES.maxSlots }, (_, slot) => {
@@ -135,7 +238,7 @@ export function ImageSlots({
           if (image) {
             return (
               <div key={slot} className="mu-slot mu-slot-filled cursor-default">
-                {/* eslint-disable-next-line @next/next/no-img-element -- uploads are streamed from the data dir. */}
+                {/* eslint-disable-next-line @next/next/no-img-element -- image bytes live behind the stable Minted Up media route. */}
                 <img src={`/api/mintedup/images/${image.filename}`} alt="" />
                 <span className="mu-sans absolute left-1 top-1 rounded bg-black/70 px-1.5 py-0.5 text-[0.625rem] font-bold text-[var(--mu-brass)]">
                   {slot === 0 ? "Cover" : slot + 1}
@@ -189,7 +292,9 @@ export function ImageSlots({
         onChange={(event) => {
           const files = [...(event.target.files ?? [])];
           const slot = targetSlot.current;
-          if (files.length) void uploadMany(files, files.length === 1 && slot !== null ? slot : undefined);
+          if (files.length) {
+            void uploadMany(files, files.length === 1 && slot !== null ? slot : undefined);
+          }
           event.target.value = "";
           targetSlot.current = null;
         }}
@@ -198,7 +303,8 @@ export function ImageSlots({
       <p className="mu-sans mt-3 text-xs leading-relaxed text-[var(--mu-muted)]">
         Drag a batch of photographs onto the grid, or click a slot. Minimum{" "}
         {IMAGE_RULES.minLongEdge} px on the long edge and {IMAGE_RULES.minMegapixels} MP. We measure
-        focus in your browser and resolution on the server — nothing below the standard is stored.
+        focus in your browser and resolution on the server — nothing below the standard is attached to
+        your listing.
       </p>
 
       {rejections.length > 0 ? (

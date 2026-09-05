@@ -3,7 +3,6 @@ name: Minted Up CI
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
