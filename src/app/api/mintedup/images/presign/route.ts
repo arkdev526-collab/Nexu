@@ -5,6 +5,8 @@ import { ListingError } from "@/mintedup/listings";
 import { assertSameOrigin, enforceRateLimit } from "@/mintedup/security";
 import { newId, read } from "@/mintedup/store";
 import {
+  deleteR2Object,
+  objectKeyBelongsTo,
   pendingObjectKey,
   presignR2Upload,
   uploadStorageBackend,
@@ -18,6 +20,17 @@ function extensionForMime(type: AllowedMime): "jpg" | "png" | "webp" {
   if (type === "image/jpeg") return "jpg";
   if (type === "image/png") return "png";
   return "webp";
+}
+
+async function assertSellerCanEdit(listingId: string, userId: string): Promise<void> {
+  await read((db) => {
+    const listing = db.listings.find((candidate) => candidate.id === listingId);
+    if (!listing) throw new ListingError("Listing not found.", 404);
+    if (listing.sellerId !== userId) throw new ListingError("That is not your listing.", 403);
+    if (!EDITABLE.has(listing.status)) {
+      throw new ListingError("Images are locked while this lot is in curation or commerce.", 409);
+    }
+  });
 }
 
 /**
@@ -51,14 +64,7 @@ export async function POST(request: Request) {
       throw new ListingError("Image exceeds the 25 MB upload ceiling.", 413);
     }
 
-    await read((db) => {
-      const listing = db.listings.find((candidate) => candidate.id === listingId);
-      if (!listing) throw new ListingError("Listing not found.", 404);
-      if (listing.sellerId !== user.id) throw new ListingError("That is not your listing.", 403);
-      if (!EDITABLE.has(listing.status)) {
-        throw new ListingError("Images are locked while this lot is in curation or commerce.", 409);
-      }
-    });
+    await assertSellerCanEdit(listingId, user.id);
 
     // Local development deliberately retains the existing multipart path.
     if (uploadStorageBackend() !== "r2") return ok({ mode: "multipart" });
@@ -83,6 +89,30 @@ export async function POST(request: Request) {
       headers: signed.headers,
       expiresIn: signed.expiresIn,
     });
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+/** Best-effort cleanup for a presigned object when the browser upload fails. */
+export async function DELETE(request: Request) {
+  try {
+    assertSameOrigin(request);
+    const user = await requireUser();
+    enforceRateLimit(request, "image-upload-cancel", { limit: 40, windowMs: 60_000 }, user.id);
+
+    if (uploadStorageBackend() !== "r2") return ok({ removed: false });
+
+    const body = await request.json().catch(() => ({}));
+    const listingId = String(body.listingId ?? "");
+    const filename = String(body.filename ?? "");
+    if (!objectKeyBelongsTo(filename, user.id, listingId, "pending")) {
+      throw new ListingError("That upload does not belong to this listing.", 403);
+    }
+
+    await assertSellerCanEdit(listingId, user.id);
+    await deleteR2Object(filename);
+    return ok({ removed: true });
   } catch (error) {
     return fail(error);
   }
