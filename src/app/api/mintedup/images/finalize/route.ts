@@ -3,12 +3,12 @@ import { fail, ok } from "@/mintedup/http";
 import { gradeImage, IMAGE_RULES } from "@/mintedup/images";
 import { ListingError } from "@/mintedup/listings";
 import { assertSameOrigin, enforceRateLimit } from "@/mintedup/security";
-import { deleteUpload, mutate, read } from "@/mintedup/store";
+import { mutate, read } from "@/mintedup/store";
+import { deleteStoredUpload } from "@/mintedup/stored-upload";
 import type { ListingImage } from "@/mintedup/types";
 import {
   deleteR2Object,
   headR2Object,
-  isR2ObjectKey,
   objectKeyBelongsTo,
   parseObjectKey,
   promotePendingR2Object,
@@ -18,11 +18,6 @@ import {
 
 const EDITABLE = new Set(["draft", "changes", "rejected"]);
 const MAX_FINALIZE_AGE_MS = 30 * 60_000;
-
-async function deleteStoredUpload(filename: string): Promise<void> {
-  if (isR2ObjectKey(filename)) await deleteR2Object(filename);
-  else await deleteUpload(filename);
-}
 
 /**
  * Turn a private temporary R2 object into a listing photograph.
