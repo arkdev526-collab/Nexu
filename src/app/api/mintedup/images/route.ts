@@ -1,4 +1,5 @@
 import { requireUser } from "@/mintedup/auth";
+import { validateImageUploadIntent } from "@/mintedup/image-upload-policy";
 import { fail, ok } from "@/mintedup/http";
 import { extensionFor, gradeImage, IMAGE_RULES } from "@/mintedup/images";
 import { ListingError } from "@/mintedup/listings";
@@ -57,20 +58,17 @@ export async function POST(request: Request) {
     const form = await request.formData();
     const file = form.get("file");
     const listingId = String(form.get("listingId") ?? "");
-    const slot = Number(form.get("slot") ?? 0);
+    const rawSlot = Number(form.get("slot") ?? 0);
     const rawSharpness = form.get("sharpness");
     const sharpness = rawSharpness === null || rawSharpness === "" ? null : Number(rawSharpness);
 
     if (!(file instanceof File)) throw new ListingError("No file was uploaded.");
-    if (file.size > IMAGE_RULES.maxBytes) {
-      throw new ListingError("Image exceeds the 25 MB upload ceiling.", 413);
-    }
-    if (!IMAGE_RULES.allowed.includes(file.type as (typeof IMAGE_RULES.allowed)[number])) {
-      throw new ListingError("Minted Up accepts JPEG, PNG and WebP only.", 415);
-    }
-    if (!Number.isInteger(slot) || slot < 0 || slot >= IMAGE_RULES.maxSlots) {
-      throw new ListingError(`Slot must be between 1 and ${IMAGE_RULES.maxSlots}.`);
-    }
+    const intent = validateImageUploadIntent({
+      slot: rawSlot,
+      contentType: file.type,
+      size: file.size,
+    });
+    const slot = intent.slot;
 
     // Check ownership before accepting bytes to disk, then check again in the
     // database mutation in case listing state changed between the two steps.
@@ -89,7 +87,7 @@ export async function POST(request: Request) {
     if (!quality.accepted) return ok({ accepted: false, quality }, 422);
 
     const expectedMime = quality.format === "jpeg" ? "image/jpeg" : `image/${quality.format}`;
-    if (file.type !== expectedMime) {
+    if (intent.contentType !== expectedMime) {
       throw new ListingError("The file contents do not match the declared image type.", 415);
     }
 
