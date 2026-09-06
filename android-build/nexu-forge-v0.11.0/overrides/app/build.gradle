@@ -1,0 +1,61 @@
+plugins {
+    id 'com.android.application'
+}
+android {
+    namespace = 'uk.co.sumerostudio.nexuai3dforge'
+    compileSdk = 36
+    buildToolsVersion = '36.0.0'
+    defaultConfig {
+        applicationId = 'uk.co.sumerostudio.nexuai3dforge'
+        minSdk = 30
+        targetSdk = 36
+        versionCode = 110
+        versionName = '0.11.0'
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    buildTypes {
+        debug {
+            applicationIdSuffix = '.debug'
+            versionNameSuffix = '-debug'
+        }
+        release {
+            minifyEnabled = false
+            shrinkResources = false
+        }
+    }
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
+        checkDependencies = true
+        htmlReport = true
+        textReport = true
+        xmlReport = true
+    }
+}
+androidComponents {
+    beforeVariants(selector().all()) { variant ->
+        variant.enableUnitTest = true
+    }
+}
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
+def brandingInput = file('src/main/branding/appicon.png.b64')
+def brandingOutput = file('src/main/res/drawable-nodpi/appicon.png')
+tasks.register('prepareForgeBranding') {
+    inputs.file(brandingInput)
+    outputs.file(brandingOutput)
+    doLast {
+        brandingOutput.parentFile.mkdirs()
+        brandingOutput.bytes = brandingInput.text.trim().decodeBase64()
+    }
+}
+tasks.configureEach { task ->
+    if (task.name == 'preBuild') task.dependsOn('prepareForgeBranding')
+}
+gradle.projectsEvaluated {
+    println('FORGE_AVAILABLE_TEST_TASKS=' + tasks.names.findAll { it.toLowerCase().contains('test') }.sort().join(','))
+}
