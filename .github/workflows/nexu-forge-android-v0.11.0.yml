@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c
         with:
           distribution: microsoft
-          java-version: '21.0.12.1'
+          java-version: '21.0.12'
           verify-signature: true
       - name: Reconstruct protected baseline and apply Android-only fixes
         shell: bash
@@ -41,7 +41,8 @@ jobs:
           PY
           python3 android-build/nexu-forge-v0.11.0/finish.py project
           python3 android-build/nexu-forge-v0.11.0/regression-fixes.py project
-          if [ -f android-build/nexu-forge-v0.11.0/final-fixes.py ]; then python3 android-build/nexu-forge-v0.11.0/final-fixes.py project; fi
+          python3 android-build/nexu-forge-v0.11.0/final-fixes.py project
+          if [ -f android-build/nexu-forge-v0.11.0/rc-fixes.py ]; then python3 android-build/nexu-forge-v0.11.0/rc-fixes.py project; fi
       - name: Provision pinned Android SDK
         shell: bash
         run: |
@@ -71,7 +72,7 @@ jobs:
           java -version 2> evidence/java-version.txt
           gradle --version > evidence/gradle-version.txt
           gradle -p project wrapper --gradle-version 9.5.0 --distribution-type bin --gradle-distribution-sha256-sum 553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746 --no-daemon
-          gradle -p project clean testReleaseUnitTest lintRelease assembleRelease --no-daemon --stacktrace --warning-mode all 2>&1 | tee evidence/build.log
+          gradle -p project clean testReleaseUnitTest lintRelease assembleRelease --write-locks --no-daemon --stacktrace --warning-mode all 2>&1 | tee evidence/build.log
           python3 - <<'PY'
           import pathlib,xml.etree.ElementTree as E
           files=list(pathlib.Path('project/app/build/test-results').rglob('TEST-*.xml'));assert files
@@ -98,8 +99,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f android-build/nexu-forge-v0.11.0/emulator-smoke.py ]; then exit 0; fi
-          gradle -p project assembleDebug --no-daemon > evidence/debug-assembly.log 2>&1
+          gradle -p project assembleDebug --write-locks --no-daemon > evidence/debug-assembly.log 2>&1
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-36;google_apis;x86_64' > evidence/emulator-install.log
           echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd --force -n forge_api36 -k 'system-images;android-36;google_apis;x86_64' > evidence/avd-create.log
           if [ -e /dev/kvm ]; then sudo setfacl -m "u:$(whoami):rw" /dev/kvm; fi
