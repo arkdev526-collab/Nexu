@@ -1,4 +1,4 @@
 Nexu AI 3D Forge Android v0.11.0
-RC gate 14: explicit Android platform-tools PATH and consistent AVD locations.
-Rebuild, 38 unit tests minimum, lint, release alignment and exact metadata checks, API36 emulator smoke tests.
-Desktop baseline unchanged; release signing secrets remain outside CI.
+RC gate 15: fix PhoneWindow pre-decor null dereference; system bar appearance on attached-view insets only.
+Rebuild, 38 unit tests minimum, zero lint errors, alignment/metadata, API36 emulator first-launch and lifecycle regression.
+No desktop changes, no signing secrets in CI.
