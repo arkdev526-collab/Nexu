@@ -1,3 +1,3 @@
 Nexu AI 3D Forge Android v0.11.0
-RC gate 12: Microsoft official JDK21.0.12 archive checksum and detached signature verification, no setup-action catalogue dependency.
-Compile 38 tests, lint, locked release assembly, align, metadata and API36 emulator. Desktop remains unchanged; signing outside CI.
+RC gate 13: actual aapt2 minSdk field, pinned official JDK hash and certificate fingerprint, resource fixes, API36 emulator smoke tests.
+38 test gate, zero lint errors, release alignment, exact identity. Desktop preserved; no release key in CI.
