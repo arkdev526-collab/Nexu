@@ -1,3 +1,3 @@
 Nexu AI 3D Forge Android v0.11.0
-RC gate 10: AndroidX Activity lifecycle-aware back/document results, constant SAF permissions, adaptive icon, readable font scaling, current JDK21 security patch.
-Require 38 executed unit tests, no lint errors, aligned release identity and isolated API36 emulator smoke checks. No release signing secret in CI.
+RC gate 11: correct official JDK21.0.12 vendor release, AndroidX lifecycle fixes, source tests, lint, locked dependencies, APK alignment and Android16 emulator smoke gate.
+Desktop unchanged; signing never performed with a private release key in CI.
