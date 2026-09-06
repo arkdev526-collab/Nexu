@@ -1,3 +1,3 @@
 Nexu AI 3D Forge Android v0.11.0
-RC gate 08: hash-recovered input plus audited ordinary Java source repairs.
-38 required executed tests; lint, release assembly, alignment and identity gate. No private signing key in CI.
+RC gate 09: verified native Java callback repair, API 30–34 window compatibility isolation, viewport button fixes.
+Require executed tests, zero lint errors, unsigned assembly, alignment and exact package metadata. Signing remains outside CI.
