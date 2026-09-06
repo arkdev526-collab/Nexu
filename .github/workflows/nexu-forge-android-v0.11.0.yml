@@ -2,6 +2,7 @@ name: Nexu Forge Android v0.11.0 RC
 on:
   push:
     branches: [build/nexu-forge-android-v0.11.0]
+    paths: [android-build/nexu-forge-v0.11.0/READY]
 permissions:
   contents: read
 concurrency:
@@ -21,7 +22,7 @@ jobs:
           distribution: microsoft
           java-version: '21.0.11'
           verify-signature: true
-      - name: Recover hash-identical baseline and apply reviewed source fixes
+      - name: Recover protected input and apply Android-only fixes
         shell: bash
         run: |
           set -euo pipefail
@@ -33,18 +34,18 @@ jobs:
           assert len(parts)==11
           first=parts[0].read_bytes().strip()
           assert len(first)==6001 and first[-1:]==b'I'
-          encoded=first[:-1]+b''.join(p.read_bytes().strip() for p in parts[1:])
-          data=base64.b64decode(encoded, validate=True)
+          data=base64.b64decode(first[:-1]+b''.join(p.read_bytes().strip() for p in parts[1:]),validate=True)
           digest=hashlib.sha256(data).hexdigest()
-          assert digest=='d4f72e0cf2454f826c9554b42399dc29065e44bd1e163a1d6570560fd994508a',digest
+          assert digest=='d4f72e0cf2454f826c9554b42399dc29065e44bd1e163a1d6570560fd994508a'
           archive=zipfile.ZipFile(io.BytesIO(data)); assert archive.testzip() is None
           for n in archive.namelist():
               assert not pathlib.PurePosixPath(n).is_absolute() and '..' not in pathlib.PurePosixPath(n).parts
           archive.extractall('project')
-          pathlib.Path('evidence/baseline-recovery.txt').write_text('Exact original archive SHA256: '+digest+'\nAll ZIP CRC checks passed. Removed one inserted I at base64 offset 6000.\n')
-          if (root/'overrides').exists(): shutil.copytree(root/'overrides','project',dirs_exist_ok=True)
+          pathlib.Path('evidence/baseline-recovery.txt').write_text('SHA256: '+digest+'\nZIP CRCs pass. One inserted I removed at encoded offset 6000. Desktop baseline not modified.\n')
+          shutil.copytree(root/'overrides','project',dirs_exist_ok=True)
           PY
-      - name: Provision API 36 and Build Tools 36.0.0
+          if [ -f android-build/nexu-forge-v0.11.0/harden.py ]; then python3 android-build/nexu-forge-v0.11.0/harden.py project; fi
+      - name: Provision pinned Android SDK
         shell: bash
         run: |
           set -euo pipefail
@@ -54,27 +55,41 @@ jobs:
           set -o pipefail
           "$MANAGER" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
           "$MANAGER" --list_installed > evidence/sdk-installed.txt
-          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" tools/
-          cp "$ANDROID_HOME/build-tools/36.0.0/zipalign" tools/
-          cp "$ANDROID_HOME/build-tools/36.0.0/aapt2" tools/
+          cp "$ANDROID_HOME/platforms/android-36/android.jar" tools/
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+          cp "$BT/lib/apksigner.jar" "$BT/zipalign" "$BT/aapt2" tools/
+          ldd "$BT/zipalign" > evidence/zipalign-libraries.txt
+          for LIB in $(ldd "$BT/zipalign" | awk '/libc\+\+|libc\+\+abi|libunwind/ {print $3}'); do cp -L "$LIB" tools/; done
           (cd tools && sha256sum *) > evidence/tool-sha256.txt
-      - name: Provision verified Gradle 9.5.0
+      - name: Provision checksum-pinned Gradle
         shell: bash
         run: |
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -fLsS https://services.gradle.org/distributions/gradle-9.5.0-bin.zip -o "$RUNNER_TEMP/gradle.zip"
-          curl --proto '=https' --tlsv1.2 -fLsS https://services.gradle.org/distributions/gradle-9.5.0-bin.zip.sha256 -o evidence/gradle-distribution.sha256
-          printf '%s  %s\n' "$(cat evidence/gradle-distribution.sha256)" "$RUNNER_TEMP/gradle.zip" | sha256sum -c -
+          echo "553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746  $RUNNER_TEMP/gradle.zip" | sha256sum -c - > evidence/gradle-download-verification.txt
           unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/gradle-9.5.0/bin" >> "$GITHUB_PATH"
-      - name: Compile, test, lint and assemble release
+      - name: Compile, unit test, lint and assemble unsigned release
         shell: bash
         run: |
           set -euo pipefail
           java -version 2> evidence/java-version.txt
           gradle --version > evidence/gradle-version.txt
+          gradle -p project wrapper --gradle-version 9.5.0 --distribution-type bin --gradle-distribution-sha256-sum 553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746 --no-daemon
           gradle -p project clean testReleaseUnitTest lintRelease assembleRelease --no-daemon --stacktrace --warning-mode all 2>&1 | tee evidence/build.log
-      - name: Align APK and enforce package metadata
+          python3 - <<'PY'
+          import pathlib, xml.etree.ElementTree as E
+          files=list(pathlib.Path('project/app/build/test-results').rglob('TEST-*.xml'))
+          assert files,'No executed unit-test XML'
+          results=[E.parse(f).getroot() for f in files]
+          n=sum(int(r.get('tests','0')) for r in results)
+          assert n>=4 and all(int(r.get('failures','0'))==0 and int(r.get('errors','0'))==0 and int(r.get('skipped','0'))==0 for r in results)
+          lint=E.parse('project/app/build/reports/lint-results-release.xml').getroot()
+          issues=[i for i in lint.findall('issue') if i.get('severity') in ('Error','Fatal')]
+          assert not issues
+          pathlib.Path('evidence/tests-lint-summary.txt').write_text(f'{n} executed tests: PASS\nLint errors: 0\n')
+          PY
+      - name: Align and enforce APK identity
         shell: bash
         run: |
           set -euo pipefail
@@ -88,7 +103,7 @@ jobs:
           grep -q "sdkVersion:'30'" evidence/apk-metadata.txt
           grep -q "targetSdkVersion:'36'" evidence/apk-metadata.txt
           sha256sum evidence/*-unsigned-aligned.apk > evidence/unsigned-apk.sha256
-      - name: Retain exact build inputs and reports
+      - name: Retain exact build inputs and all reports
         if: always()
         shell: bash
         run: |
@@ -97,6 +112,7 @@ jobs:
           if [ -d project/app/build/reports ]; then cp -r project/app/build/reports evidence/; fi
           if [ -d project/app/build/test-results ]; then cp -r project/app/build/test-results evidence/; fi
           if [ -d project ]; then (cd project && zip -qr ../evidence/corrected-source.zip . -x '.gradle/*' 'app/build/*' 'build/*'); fi
+          find "$HOME/.gradle/caches/modules-2/files-2.1" -type f \( -name 'junit-4.13.2.jar' -o -name 'hamcrest-core-1.3.jar' -o -name 'json-20260719.jar' \) -exec cp '{}' tools/ \;
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
