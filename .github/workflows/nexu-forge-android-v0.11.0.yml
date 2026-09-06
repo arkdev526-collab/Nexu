@@ -4,34 +4,110 @@ on:
     branches: [build/nexu-forge-android-v0.11.0]
 permissions:
   contents: read
+concurrency:
+  group: nexu-forge-android-v0.11.0
+  cancel-in-progress: false
 jobs:
-  source-recovery:
+  android-release-gate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           sparse-checkout: android-build
-      - name: Preserve original staged source and diagnose encoding
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c
+        with:
+          distribution: microsoft
+          java-version: '21.0.11'
+          verify-signature: true
+      - name: Recover hash-identical baseline and apply reviewed source fixes
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p recovery/parts
-          cp android-build/nexu-forge-v0.11.0/project.b64.part-* recovery/parts/
+          mkdir -p evidence tools
           python3 - <<'PY'
-          import pathlib, hashlib, json, base64
-          root=pathlib.Path('recovery')
-          rows=[]
-          for p in sorted((root/'parts').glob('*')):
-              raw=p.read_bytes()
-              rows.append({'name':p.name,'length':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
-          (root/'source-diagnostics.json').write_text(json.dumps(rows,indent=2))
-          print(json.dumps(rows,indent=2))
+          import base64, pathlib, hashlib, zipfile, io, shutil
+          root=pathlib.Path('android-build/nexu-forge-v0.11.0')
+          parts=sorted(root.glob('project.b64.part-*'))
+          assert len(parts)==11
+          first=parts[0].read_bytes().strip()
+          assert len(first)==6001 and first[-1:]==b'I'
+          encoded=first[:-1]+b''.join(p.read_bytes().strip() for p in parts[1:])
+          data=base64.b64decode(encoded, validate=True)
+          digest=hashlib.sha256(data).hexdigest()
+          assert digest=='d4f72e0cf2454f826c9554b42399dc29065e44bd1e163a1d6570560fd994508a',digest
+          archive=zipfile.ZipFile(io.BytesIO(data)); assert archive.testzip() is None
+          for n in archive.namelist():
+              assert not pathlib.PurePosixPath(n).is_absolute() and '..' not in pathlib.PurePosixPath(n).parts
+          archive.extractall('project')
+          pathlib.Path('evidence/baseline-recovery.txt').write_text('Exact original archive SHA256: '+digest+'\nAll ZIP CRC checks passed. Removed one inserted I at base64 offset 6000.\n')
+          if (root/'overrides').exists(): shutil.copytree(root/'overrides','project',dirs_exist_ok=True)
           PY
+      - name: Provision API 36 and Build Tools 36.0.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          MANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$MANAGER" --licenses > evidence/sdk-licences.log
+          set -o pipefail
+          "$MANAGER" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
+          "$MANAGER" --list_installed > evidence/sdk-installed.txt
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" tools/
+          cp "$ANDROID_HOME/build-tools/36.0.0/zipalign" tools/
+          cp "$ANDROID_HOME/build-tools/36.0.0/aapt2" tools/
+          (cd tools && sha256sum *) > evidence/tool-sha256.txt
+      - name: Provision verified Gradle 9.5.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fLsS https://services.gradle.org/distributions/gradle-9.5.0-bin.zip -o "$RUNNER_TEMP/gradle.zip"
+          curl --proto '=https' --tlsv1.2 -fLsS https://services.gradle.org/distributions/gradle-9.5.0-bin.zip.sha256 -o evidence/gradle-distribution.sha256
+          printf '%s  %s\n' "$(cat evidence/gradle-distribution.sha256)" "$RUNNER_TEMP/gradle.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-9.5.0/bin" >> "$GITHUB_PATH"
+      - name: Compile, test, lint and assemble release
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -version 2> evidence/java-version.txt
+          gradle --version > evidence/gradle-version.txt
+          gradle -p project clean testReleaseUnitTest lintRelease assembleRelease --no-daemon --stacktrace --warning-mode all 2>&1 | tee evidence/build.log
+      - name: Align APK and enforce package metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+          APK=project/app/build/outputs/apk/release/app-release-unsigned.apk
+          test -f "$APK"
+          "$BT/zipalign" -P 16 -f -v 4 "$APK" evidence/Nexu-AI-3D-Forge-Android-v0.11.0-unsigned-aligned.apk > evidence/zipalign-build.txt
+          "$BT/zipalign" -c -P 16 -v 4 evidence/*-unsigned-aligned.apk > evidence/zipalign-verify.txt
+          "$BT/aapt2" dump badging evidence/*-unsigned-aligned.apk > evidence/apk-metadata.txt
+          grep -q "name='uk.co.sumerostudio.nexuai3dforge' versionCode='110' versionName='0.11.0'" evidence/apk-metadata.txt
+          grep -q "sdkVersion:'30'" evidence/apk-metadata.txt
+          grep -q "targetSdkVersion:'36'" evidence/apk-metadata.txt
+          sha256sum evidence/*-unsigned-aligned.apk > evidence/unsigned-apk.sha256
+      - name: Retain exact build inputs and reports
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p evidence
+          printf '%s\n' "$GITHUB_SHA" > evidence/commit.txt
+          if [ -d project/app/build/reports ]; then cp -r project/app/build/reports evidence/; fi
+          if [ -d project/app/build/test-results ]; then cp -r project/app/build/test-results evidence/; fi
+          if [ -d project ]; then (cd project && zip -qr ../evidence/corrected-source.zip . -x '.gradle/*' 'app/build/*' 'build/*'); fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
         with:
-          name: nexu-forge-android-source-recovery
-          path: recovery/
+          name: nexu-forge-android-v0.11.0-evidence
+          path: evidence/
+          retention-days: 14
           if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: nexu-forge-build-tools-36.0.0
+          path: tools/
           retention-days: 7
+          if-no-files-found: warn
