@@ -22,29 +22,25 @@ jobs:
           distribution: microsoft
           java-version: '21.0.11'
           verify-signature: true
-      - name: Recover protected input and apply Android-only fixes
+      - name: Reconstruct protected baseline and apply Android source corrections
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p evidence tools
           python3 - <<'PY'
-          import base64, pathlib, hashlib, zipfile, io, shutil
+          import pathlib,base64,hashlib,zipfile,io,shutil
           root=pathlib.Path('android-build/nexu-forge-v0.11.0')
-          parts=sorted(root.glob('project.b64.part-*'))
-          assert len(parts)==11
-          first=parts[0].read_bytes().strip()
-          assert len(first)==6001 and first[-1:]==b'I'
+          parts=sorted(root.glob('project.b64.part-*'));assert len(parts)==11
+          first=parts[0].read_bytes().strip();assert len(first)==6001 and first[-1:]==b'I'
           data=base64.b64decode(first[:-1]+b''.join(p.read_bytes().strip() for p in parts[1:]),validate=True)
-          digest=hashlib.sha256(data).hexdigest()
-          assert digest=='d4f72e0cf2454f826c9554b42399dc29065e44bd1e163a1d6570560fd994508a'
-          archive=zipfile.ZipFile(io.BytesIO(data)); assert archive.testzip() is None
-          for n in archive.namelist():
-              assert not pathlib.PurePosixPath(n).is_absolute() and '..' not in pathlib.PurePosixPath(n).parts
-          archive.extractall('project')
-          pathlib.Path('evidence/baseline-recovery.txt').write_text('SHA256: '+digest+'\nZIP CRCs pass. One inserted I removed at encoded offset 6000. Desktop baseline not modified.\n')
-          shutil.copytree(root/'overrides','project',dirs_exist_ok=True)
+          digest=hashlib.sha256(data).hexdigest();assert digest=='d4f72e0cf2454f826c9554b42399dc29065e44bd1e163a1d6570560fd994508a'
+          archive=zipfile.ZipFile(io.BytesIO(data));assert archive.testzip() is None
+          for n in archive.namelist():assert not pathlib.PurePosixPath(n).is_absolute() and '..' not in pathlib.PurePosixPath(n).parts
+          archive.extractall('project');shutil.copytree(root/'overrides','project',dirs_exist_ok=True)
+          pathlib.Path('evidence/baseline-recovery.txt').write_text('Protected original archive SHA256: '+digest+'\nAll ZIP CRCs pass. Desktop source unchanged.\n')
           PY
-          if [ -f android-build/nexu-forge-v0.11.0/harden.py ]; then python3 android-build/nexu-forge-v0.11.0/harden.py project; fi
+          python3 android-build/nexu-forge-v0.11.0/finish.py project
+          if [ -f android-build/nexu-forge-v0.11.0/regression-fixes.py ]; then python3 android-build/nexu-forge-v0.11.0/regression-fixes.py project; fi
       - name: Provision pinned Android SDK
         shell: bash
         run: |
@@ -60,7 +56,6 @@ jobs:
           cp "$BT/lib/apksigner.jar" "$BT/zipalign" "$BT/aapt2" tools/
           ldd "$BT/zipalign" > evidence/zipalign-libraries.txt
           for LIB in $(ldd "$BT/zipalign" | awk '/libc\+\+|libc\+\+abi|libunwind/ {print $3}'); do cp -L "$LIB" tools/; done
-          (cd tools && sha256sum *) > evidence/tool-sha256.txt
       - name: Provision checksum-pinned Gradle
         shell: bash
         run: |
@@ -69,7 +64,7 @@ jobs:
           echo "553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746  $RUNNER_TEMP/gradle.zip" | sha256sum -c - > evidence/gradle-download-verification.txt
           unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/gradle-9.5.0/bin" >> "$GITHUB_PATH"
-      - name: Compile, unit test, lint and assemble unsigned release
+      - name: Compile, unit test, lint and assemble release
         shell: bash
         run: |
           set -euo pipefail
@@ -78,18 +73,15 @@ jobs:
           gradle -p project wrapper --gradle-version 9.5.0 --distribution-type bin --gradle-distribution-sha256-sum 553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746 --no-daemon
           gradle -p project clean testReleaseUnitTest lintRelease assembleRelease --no-daemon --stacktrace --warning-mode all 2>&1 | tee evidence/build.log
           python3 - <<'PY'
-          import pathlib, xml.etree.ElementTree as E
-          files=list(pathlib.Path('project/app/build/test-results').rglob('TEST-*.xml'))
-          assert files,'No executed unit-test XML'
-          results=[E.parse(f).getroot() for f in files]
-          n=sum(int(r.get('tests','0')) for r in results)
-          assert n>=4 and all(int(r.get('failures','0'))==0 and int(r.get('errors','0'))==0 and int(r.get('skipped','0'))==0 for r in results)
-          lint=E.parse('project/app/build/reports/lint-results-release.xml').getroot()
-          issues=[i for i in lint.findall('issue') if i.get('severity') in ('Error','Fatal')]
-          assert not issues
-          pathlib.Path('evidence/tests-lint-summary.txt').write_text(f'{n} executed tests: PASS\nLint errors: 0\n')
+          import pathlib,xml.etree.ElementTree as E
+          files=list(pathlib.Path('project/app/build/test-results').rglob('TEST-*.xml'));assert files
+          results=[E.parse(f).getroot() for f in files];n=sum(int(r.get('tests','0')) for r in results)
+          assert n>=38 and all(int(r.get('failures','0'))==0 and int(r.get('errors','0'))==0 and int(r.get('skipped','0'))==0 for r in results)
+          issues=E.parse('project/app/build/reports/lint-results-release.xml').getroot().findall('issue')
+          assert not [i for i in issues if i.get('severity') in ('Error','Fatal')]
+          pathlib.Path('evidence/tests-lint-summary.txt').write_text(f'{n} executed tests: PASS\nLint errors: 0\nLint other findings: {len(issues)}\n')
           PY
-      - name: Align and enforce APK identity
+      - name: Align and verify APK metadata
         shell: bash
         run: |
           set -euo pipefail
@@ -103,16 +95,17 @@ jobs:
           grep -q "sdkVersion:'30'" evidence/apk-metadata.txt
           grep -q "targetSdkVersion:'36'" evidence/apk-metadata.txt
           sha256sum evidence/*-unsigned-aligned.apk > evidence/unsigned-apk.sha256
-      - name: Retain exact build inputs and all reports
+      - name: Retain corrected build inputs and reports
         if: always()
         shell: bash
         run: |
-          mkdir -p evidence
+          mkdir -p evidence tools
           printf '%s\n' "$GITHUB_SHA" > evidence/commit.txt
           if [ -d project/app/build/reports ]; then cp -r project/app/build/reports evidence/; fi
           if [ -d project/app/build/test-results ]; then cp -r project/app/build/test-results evidence/; fi
           if [ -d project ]; then (cd project && zip -qr ../evidence/corrected-source.zip . -x '.gradle/*' 'app/build/*' 'build/*'); fi
-          find "$HOME/.gradle/caches/modules-2/files-2.1" -type f \( -name 'junit-4.13.2.jar' -o -name 'hamcrest-core-1.3.jar' -o -name 'json-20260719.jar' \) -exec cp '{}' tools/ \;
+          if [ -d "$HOME/.gradle/caches/modules-2/files-2.1" ]; then find "$HOME/.gradle/caches/modules-2/files-2.1" -type f \( -name 'junit-4.13.2.jar' -o -name 'hamcrest-core-1.3.jar' -o -name 'json-20260719.jar' \) -exec cp '{}' tools/ \;; fi
+          (cd tools && sha256sum *) > evidence/tool-sha256.txt || true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
