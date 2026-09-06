@@ -11,7 +11,7 @@ concurrency:
 jobs:
   android-release-gate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -20,9 +20,9 @@ jobs:
       - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c
         with:
           distribution: microsoft
-          java-version: '21.0.11'
+          java-version: '21.0.12.1'
           verify-signature: true
-      - name: Reconstruct protected baseline and apply Android source corrections
+      - name: Reconstruct protected baseline and apply Android-only fixes
         shell: bash
         run: |
           set -euo pipefail
@@ -37,10 +37,11 @@ jobs:
           archive=zipfile.ZipFile(io.BytesIO(data));assert archive.testzip() is None
           for n in archive.namelist():assert not pathlib.PurePosixPath(n).is_absolute() and '..' not in pathlib.PurePosixPath(n).parts
           archive.extractall('project');shutil.copytree(root/'overrides','project',dirs_exist_ok=True)
-          pathlib.Path('evidence/baseline-recovery.txt').write_text('Protected original archive SHA256: '+digest+'\nAll ZIP CRCs pass. Desktop source unchanged.\n')
+          pathlib.Path('evidence/baseline-recovery.txt').write_text('Protected source SHA256: '+digest+'\nAll ZIP CRCs pass. Desktop source unchanged.\n')
           PY
           python3 android-build/nexu-forge-v0.11.0/finish.py project
-          if [ -f android-build/nexu-forge-v0.11.0/regression-fixes.py ]; then python3 android-build/nexu-forge-v0.11.0/regression-fixes.py project; fi
+          python3 android-build/nexu-forge-v0.11.0/regression-fixes.py project
+          if [ -f android-build/nexu-forge-v0.11.0/final-fixes.py ]; then python3 android-build/nexu-forge-v0.11.0/final-fixes.py project; fi
       - name: Provision pinned Android SDK
         shell: bash
         run: |
@@ -51,9 +52,8 @@ jobs:
           set -o pipefail
           "$MANAGER" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
           "$MANAGER" --list_installed > evidence/sdk-installed.txt
-          cp "$ANDROID_HOME/platforms/android-36/android.jar" tools/
           BT="$ANDROID_HOME/build-tools/36.0.0"
-          cp "$BT/lib/apksigner.jar" "$BT/zipalign" "$BT/aapt2" tools/
+          cp "$ANDROID_HOME/platforms/android-36/android.jar" "$BT/lib/apksigner.jar" "$BT/zipalign" "$BT/aapt2" tools/
           ldd "$BT/zipalign" > evidence/zipalign-libraries.txt
           for LIB in $(ldd "$BT/zipalign" | awk '/libc\+\+|libc\+\+abi|libunwind/ {print $3}'); do cp -L "$LIB" tools/; done
       - name: Provision checksum-pinned Gradle
@@ -79,15 +79,14 @@ jobs:
           assert n>=38 and all(int(r.get('failures','0'))==0 and int(r.get('errors','0'))==0 and int(r.get('skipped','0'))==0 for r in results)
           issues=E.parse('project/app/build/reports/lint-results-release.xml').getroot().findall('issue')
           assert not [i for i in issues if i.get('severity') in ('Error','Fatal')]
-          pathlib.Path('evidence/tests-lint-summary.txt').write_text(f'{n} executed tests: PASS\nLint errors: 0\nLint other findings: {len(issues)}\n')
+          pathlib.Path('evidence/tests-lint-summary.txt').write_text(f'{n} executed tests: PASS\nLint errors: 0\nOther findings: {len(issues)}\n')
           PY
-      - name: Align and verify APK metadata
+      - name: Align and enforce APK identity
         shell: bash
         run: |
           set -euo pipefail
           BT="$ANDROID_HOME/build-tools/36.0.0"
           APK=project/app/build/outputs/apk/release/app-release-unsigned.apk
-          test -f "$APK"
           "$BT/zipalign" -P 16 -f -v 4 "$APK" evidence/Nexu-AI-3D-Forge-Android-v0.11.0-unsigned-aligned.apk > evidence/zipalign-build.txt
           "$BT/zipalign" -c -P 16 -v 4 evidence/*-unsigned-aligned.apk > evidence/zipalign-verify.txt
           "$BT/aapt2" dump badging evidence/*-unsigned-aligned.apk > evidence/apk-metadata.txt
@@ -95,7 +94,20 @@ jobs:
           grep -q "sdkVersion:'30'" evidence/apk-metadata.txt
           grep -q "targetSdkVersion:'36'" evidence/apk-metadata.txt
           sha256sum evidence/*-unsigned-aligned.apk > evidence/unsigned-apk.sha256
-      - name: Retain corrected build inputs and reports
+      - name: Android 16 emulator smoke gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f android-build/nexu-forge-v0.11.0/emulator-smoke.py ]; then exit 0; fi
+          gradle -p project assembleDebug --no-daemon > evidence/debug-assembly.log 2>&1
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-36;google_apis;x86_64' > evidence/emulator-install.log
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd --force -n forge_api36 -k 'system-images;android-36;google_apis;x86_64' > evidence/avd-create.log
+          if [ -e /dev/kvm ]; then sudo setfacl -m "u:$(whoami):rw" /dev/kvm; fi
+          "$ANDROID_HOME/emulator/emulator" -avd forge_api36 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > evidence/emulator.log 2>&1 &
+          timeout 240 adb wait-for-device
+          python3 android-build/nexu-forge-v0.11.0/emulator-smoke.py
+          adb emu kill
+      - name: Retain corrected build inputs and evidence
         if: always()
         shell: bash
         run: |
