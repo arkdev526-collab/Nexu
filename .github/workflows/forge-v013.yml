@@ -1,0 +1,72 @@
+name: Forge 0.13.0 Windows and Android
+on:
+  push:
+    branches: [build/nexu-forge-v0.13.0]
+    paths: [forge-build-v013/**, .github/workflows/forge-v013.yml]
+permissions:
+  contents: read
+concurrency:
+  group: forge-v013
+  cancel-in-progress: false
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.26.6'
+          cache: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.19.0'
+      - name: Verify and extract source
+        shell: pwsh
+        run: |
+          if ((Get-FileHash forge-build-v013/source.zip -Algorithm SHA256).Hash.ToLower() -ne '03b0a1265ca53c4d0565ac89742a5dcdc8f15cd7c32c6615b443b960fafd5152') { throw 'Source hash mismatch' }
+          Expand-Archive forge-build-v013/source.zip project
+          New-Item -ItemType Directory -Force evidence | Out-Null
+      - name: Test and package Windows
+        shell: pwsh
+        run: |
+          Set-Location project/Host
+          node --test 3d-forge/tests/*.test.mjs 2>&1 | Tee-Object ../../evidence/windows-tests.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Host regression tests failed' }
+          $env:NEXU_GO_EXE = (Get-Command go).Source
+          go run packaging/build-windows-candidate.go 2>&1 | Tee-Object ../../evidence/windows-build.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
+          Copy-Item artifacts/windows-candidate/*Setup*.exe ../../evidence/
+          Get-FileHash ../../evidence/*.exe -Algorithm SHA256 | Format-List | Out-File ../../evidence/windows-sha256.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: forge-v013-windows
+          path: evidence/
+          retention-days: 7
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Build and verify Android
+        shell: bash
+        run: bash forge-build-v013/android.sh
+      - name: Retain Android reports
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p evidence
+          cp -r project/Android/app/build/reports evidence/ 2>/dev/null || true
+          cp -r project/Android/app/build/test-results evidence/ 2>/dev/null || true
+          cp project/Android/app/gradle.lockfile evidence/ 2>/dev/null || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: forge-v013-android
+          path: evidence/
+          retention-days: 7
