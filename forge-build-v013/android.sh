@@ -25,7 +25,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 java -version 2> evidence/java-version.txt
 grep -q '21.0.12' evidence/java-version.txt
 
-echo '03b0a1265ca53c4d0565ac89742a5dcdc8f15cd7c32c6615b443b960fafd5152  forge-build-v013/source.zip' | sha256sum -c -
+echo '786c219ba6c8f911230b77973a7483c409f875de14c9977a0ca3a4d262465d2c  forge-build-v013/source.zip' | sha256sum -c -
 unzip -q forge-build-v013/source.zip -d project
 MANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 "$MANAGER" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
@@ -39,3 +39,19 @@ grep -q "name='uk.co.sumerostudio.nexuai3dforge.preview.v0130'" ../../evidence/p
 cp app/build/outputs/apk/debug/app-debug.apk ../../evidence/Nexu-AI-3D-Forge-Android-v0.13.0-Preview.apk
 cp app/build/outputs/apk/release/app-release-unsigned.apk ../../evidence/Forge-v0.13.0-UNSIGNED-NOT-INSTALLABLE.apk
 (cd ../../evidence && sha256sum *.apk > android-sha256.txt)
+
+cd ../..
+export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+export ANDROID_USER_HOME="$RUNNER_TEMP/forge13-android"
+export ANDROID_EMULATOR_HOME="$ANDROID_USER_HOME"
+export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
+export ANDROID_SERIAL=emulator-5554
+unset ANDROID_SDK_HOME
+mkdir -p "$ANDROID_AVD_HOME"
+"$MANAGER" 'emulator' 'system-images;android-36;google_apis;x86_64' > evidence/emulator-install.txt
+echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd --force -n forge13 -p "$ANDROID_AVD_HOME/forge13.avd" -k 'system-images;android-36;google_apis;x86_64' > evidence/avd-create.txt
+if [ -e /dev/kvm ]; then sudo setfacl -m "u:$(whoami):rw" /dev/kvm; fi
+"$ANDROID_HOME/emulator/emulator" -avd forge13 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader > evidence/emulator.txt 2>&1 &
+trap 'adb emu kill >/dev/null 2>&1 || true' EXIT
+timeout 240 adb wait-for-device
+python3 forge-build-v013/emulator-smoke.py

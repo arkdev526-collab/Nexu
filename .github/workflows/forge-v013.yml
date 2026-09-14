@@ -26,7 +26,7 @@ jobs:
       - name: Verify and extract source
         shell: pwsh
         run: |
-          if ((Get-FileHash forge-build-v013/source.zip -Algorithm SHA256).Hash.ToLower() -ne '03b0a1265ca53c4d0565ac89742a5dcdc8f15cd7c32c6615b443b960fafd5152') { throw 'Source hash mismatch' }
+          if ((Get-FileHash forge-build-v013/source.zip -Algorithm SHA256).Hash.ToLower() -ne '786c219ba6c8f911230b77973a7483c409f875de14c9977a0ca3a4d262465d2c') { throw 'Source hash mismatch' }
           Expand-Archive forge-build-v013/source.zip project
           New-Item -ItemType Directory -Force evidence | Out-Null
       - name: Test and package Windows
