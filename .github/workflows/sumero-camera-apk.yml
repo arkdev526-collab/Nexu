@@ -61,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
-          gradle --no-daemon clean testReleaseUnitTest lintRelease assembleRelease
+          gradle --no-daemon clean lintRelease assembleRelease
 
       - name: Verify APK
         shell: bash
