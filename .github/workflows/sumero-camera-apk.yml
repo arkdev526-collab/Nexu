@@ -75,6 +75,14 @@ jobs:
 
           p = root / 'app/src/main/kotlin/studio/sumero/dslrai/camera/CameraCapabilityScanner.kt'
           text = p.read_text()
+          text = text.replace(
+              'c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES).orEmpty().toSet()',
+              '(c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()).toSet()'
+          )
+          text = text.replace(
+              '!focalLengths.isNullOrEmpty()',
+              'focalLengths != null && focalLengths.isNotEmpty()'
+          )
           if 'focalLengths.first()' not in text:
               raise SystemExit('focal-length patch target not found')
           p.write_text(text.replace('focalLengths.first()', 'focalLengths!!.first()'))
