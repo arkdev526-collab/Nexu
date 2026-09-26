@@ -59,34 +59,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PROJECT=/tmp/sumero-camera/Sumero-DSLR-AI-Camera-v0.1.0-SOLO
           python3 - <<'PY'
           from pathlib import Path
           root = Path('/tmp/sumero-camera/Sumero-DSLR-AI-Camera-v0.1.0-SOLO')
+
           p = root / 'app/build.gradle.kts'
           text = p.read_text()
-          text = text.replace('compileSdk = 36', 'compileSdk = 37')
-          p.write_text(text)
+          if 'compileSdk = 36' not in text:
+              raise SystemExit('compileSdk patch target not found')
+          p.write_text(text.replace('compileSdk = 36', 'compileSdk = 37'))
 
           p = root / 'app/src/main/kotlin/studio/sumero/dslrai/ui/CameraScreen.kt'
-          text = p.read_text().replace('import androidx.compose.foundation.layout.weight\\n', '')
-          p.write_text(text)
+          text = p.read_text()
+          p.write_text(text.replace('import androidx.compose.foundation.layout.weight\n', ''))
 
           p = root / 'app/src/main/kotlin/studio/sumero/dslrai/camera/CameraCapabilityScanner.kt'
           text = p.read_text()
-          old = '''            val equivalentFocalMm = if (size != null && !focalLengths.isNullOrEmpty()) {
-                val sensorDiagonal = sqrt(size.width * size.width + size.height * size.height)
-                if (sensorDiagonal > 0f) focalLengths.first() * 43.2666f / sensorDiagonal else null
-            } else null'''
-          new = '''            val equivalentFocalMm = focalLengths?.firstOrNull()?.let { focalLength ->
-                if (size != null) {
-                    val sensorDiagonal = sqrt(size.width * size.width + size.height * size.height)
-                    if (sensorDiagonal > 0f) focalLength * 43.2666f / sensorDiagonal else null
-                } else null
-            }'''
-          if old not in text:
-              raise SystemExit('CameraCapabilityScanner patch target not found')
-          p.write_text(text.replace(old, new))
+          if 'focalLengths.first()' not in text:
+              raise SystemExit('focal-length patch target not found')
+          p.write_text(text.replace('focalLengths.first()', 'focalLengths!!.first()'))
           PY
 
       - name: Build and test Release
