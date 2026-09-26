@@ -37,7 +37,7 @@ jobs:
           SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)"
           test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-36" "platforms;android-37" "build-tools;36.0.0" "platform-tools"
 
       - name: Gradle 9.6.0
         uses: gradle/actions/setup-gradle@v4
@@ -54,6 +54,40 @@ jobs:
           mkdir -p /tmp/sumero-camera
           unzip -q /tmp/sumero-camera.zip -d /tmp/sumero-camera
           test -f /tmp/sumero-camera/Sumero-DSLR-AI-Camera-v0.1.0-SOLO/settings.gradle.kts
+
+      - name: Apply verified source fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT=/tmp/sumero-camera/Sumero-DSLR-AI-Camera-v0.1.0-SOLO
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path('/tmp/sumero-camera/Sumero-DSLR-AI-Camera-v0.1.0-SOLO')
+          p = root / 'app/build.gradle.kts'
+          text = p.read_text()
+          text = text.replace('compileSdk = 36', 'compileSdk = 37')
+          p.write_text(text)
+
+          p = root / 'app/src/main/kotlin/studio/sumero/dslrai/ui/CameraScreen.kt'
+          text = p.read_text().replace('import androidx.compose.foundation.layout.weight\\n', '')
+          p.write_text(text)
+
+          p = root / 'app/src/main/kotlin/studio/sumero/dslrai/camera/CameraCapabilityScanner.kt'
+          text = p.read_text()
+          old = '''            val equivalentFocalMm = if (size != null && !focalLengths.isNullOrEmpty()) {
+                val sensorDiagonal = sqrt(size.width * size.width + size.height * size.height)
+                if (sensorDiagonal > 0f) focalLengths.first() * 43.2666f / sensorDiagonal else null
+            } else null'''
+          new = '''            val equivalentFocalMm = focalLengths?.firstOrNull()?.let { focalLength ->
+                if (size != null) {
+                    val sensorDiagonal = sqrt(size.width * size.width + size.height * size.height)
+                    if (sensorDiagonal > 0f) focalLength * 43.2666f / sensorDiagonal else null
+                } else null
+            }'''
+          if old not in text:
+              raise SystemExit('CameraCapabilityScanner patch target not found')
+          p.write_text(text.replace(old, new))
+          PY
 
       - name: Build and test Release
         working-directory: /tmp/sumero-camera/Sumero-DSLR-AI-Camera-v0.1.0-SOLO
