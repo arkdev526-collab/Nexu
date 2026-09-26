@@ -73,6 +73,11 @@ jobs:
           text = p.read_text()
           p.write_text(text.replace('import androidx.compose.foundation.layout.weight\n', ''))
 
+          p = root / 'app/src/main/kotlin/studio/sumero/dslrai/camera/CameraController.kt'
+          text = p.read_text()
+          text = text.replace('@OptIn(ExperimentalCamera2Interop::class)', '@ExperimentalCamera2Interop')
+          p.write_text(text)
+
           p = root / 'app/src/main/kotlin/studio/sumero/dslrai/camera/CameraCapabilityScanner.kt'
           text = p.read_text()
           text = text.replace(
